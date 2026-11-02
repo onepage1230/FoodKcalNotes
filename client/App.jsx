@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Admin from './Admin.jsx';
 import { planGoal } from './plan.js';
-import { NUTRIENT_GOALS, nutrientGoals } from './nutrient-goals.js';
+import { NUTRIENT_GOALS, nutrientGoals, goalStatus, GOAL_STATUS_TEXT } from './nutrient-goals.js';
 import { NUTRIENTS, nutrientValue, nutrientTotals, kcalMismatch } from './nutrients.js';
 
 const fmt = n => Math.round(n).toLocaleString('en-US');
@@ -13,8 +13,11 @@ const goalNum = n => n === null || n === undefined ? '—' : Number.isInteger(n)
 const goalText = (type, g) => type === 'min' ? `≥ ${goalNum(g.min)}` : type === 'max' ? `≤ ${goalNum(g.max)}` : `${goalNum(g.min)}～${goalNum(g.max)}`;
 const fmtAmount = (n, unit) => unit === 'mg' || n >= 10 ? fmt(n) : n.toFixed(1);
 // 營養素總計：未知不當 0；有未知時顯示「至少 X」與未知項數，全部未知顯示「—」。
-const NutrientTotals = ({ totals, count }) => <div className="nutrient-totals">{NUTRIENTS.map(({ total: k, label, unit }) => { const t = totals[k];
-  return <div key={k}><small>{label}</small><b>{t.unknown >= count ? '—' : <>{t.unknown ? '至少 ' : ''}{fmtAmount(t.known, unit)}<small> {unit}</small></>}</b>{t.unknown > 0 && t.unknown < count && <small className="muted">{t.unknown} 項未知</small>}</div>; })}</div>;
+// goals（可省略）：首頁當日才傳入，顯示「／目標」與狀態提示；沒有餐點或全部未知時不提示。
+const NutrientTotals = ({ totals, count, goals }) => <div className="nutrient-totals">{NUTRIENTS.map(({ total: k, label, unit }) => { const t = totals[k]; const g = goals?.[k];
+  const status = g && t.unknown < count ? goalStatus(t, g) : 'unknown';
+  return <div key={k}><small>{label}</small><b>{t.unknown >= count ? '—' : <>{t.unknown ? '至少 ' : ''}{fmtAmount(t.known, unit)}<small> {unit}</small></>}</b>{t.unknown > 0 && t.unknown < count && <small className="muted">{t.unknown} 項未知</small>}
+    {g && <small className="muted goal-progress">目標 {goalText(g.type, g)}</small>}{GOAL_STATUS_TEXT[status] && <small className={'goal-status '+status}>{GOAL_STATUS_TEXT[status]}</small>}</div>; })}</div>;
 // 食物庫每 100g 營養素：未知顯示「—」，估算的欄位標「估」。
 const shortLabel = label => label.replace('化合物', '').replace('（總糖）', '');
 const FoodNutrients = ({ food }) => <div className="nutrient-totals food-nutrients">{NUTRIENTS.map(({ key, label, unit }) => { const v = nutrientValue(food[key]);
@@ -69,7 +72,7 @@ export default function App() {
   const [screen,setScreen]=useState('home');
   const [status,setStatus]=useState(null); const [models,setModels]=useState([]);
   const [settings,setSettings]=useState({goal:1800,fallback:'web',model:''});
-  const [day,setDay]=useState(today); const [meals,setMeals]=useState([]); const [week,setWeek]=useState([]); const [since,setSince]=useState(''); const [streak,setStreak]=useState(0); const [dayNutrients,setDayNutrients]=useState(null);
+  const [day,setDay]=useState(today); const [meals,setMeals]=useState([]); const [week,setWeek]=useState([]); const [since,setSince]=useState(''); const [streak,setStreak]=useState(0); const [dayNutrients,setDayNutrients]=useState(null); const [goalsSince,setGoalsSince]=useState('');
   const [text,setText]=useState(''); const [photo,setPhoto]=useState('');
   const [draft,setDraft]=useState(null); const [detail,setDetail]=useState(null); const [steps,setSteps]=useState([]); const [estimating,setEstimating]=useState([]); const [relookups,setRelookups]=useState([]);
   const [busy,setBusy]=useState(false); const [jobId,setJobId]=useState(null); const [jobs,setJobs]=useState([]); const [jobsOpen,setJobsOpen]=useState(false); const [saving,setSaving]=useState(false); const [error,setError]=useState(''); const [toast,setToast]=useState('');
@@ -94,7 +97,7 @@ export default function App() {
   const notify=message=>{setToast(message);};
   useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(''),3500);return()=>clearTimeout(t);},[toast]);
   async function loadJournal(date=day,keepWeek) {
-    const data=await api('/api/journal?day='+date+'&today='+today());setMeals(data.meals);if(!keepWeek)setWeek(data.week);setSince(data.since||today());setStreak(data.streak);setDayNutrients(data.dayNutrients);setSettings(data.settings);setGoalInput(String(data.settings.goal));
+    const data=await api('/api/journal?day='+date+'&today='+today());setMeals(data.meals);if(!keepWeek)setWeek(data.week);setSince(data.since||today());setStreak(data.streak);setDayNutrients(data.dayNutrients);setGoalsSince(data.nutrientGoalsSince||'');setSettings(data.settings);setGoalInput(String(data.settings.goal));
     return data;
   }
   async function loadAccount() {
@@ -236,7 +239,7 @@ export default function App() {
     {screen==='home'&&<div className="screen home swipe" {...swipe(dir=>dir>0?day>since&&shiftDay(-1):day<today()?shiftDay(1):()=>{setScreen('settings');setError('');})}>
       <header><button onClick={()=>{const n=window.prompt('日誌名稱（顯示為「○○的飲食日誌」）',settings.name||'我');if(n!==null)changeSetting({name:n});}}><b>{settings.name||'我'}的飲食日誌</b></button><button className={'streak'+(streak?'':' off')} onClick={()=>notify(streak?`連續 ${streak} 天有記錄且未超過目標`:'今天記錄且不超標就能開始連勝')} aria-label={'連勝 '+streak+' 天'}><Flame/>{streak}</button><div className="header-actions">{status?.admin&&<button className="text-button" onClick={()=>{setScreen('admin');setError('');}}>管理</button>}<button className="text-button" onClick={()=>{setScreen('history');setError('');}}>飲食紀錄</button><button className="text-button" onClick={()=>{setScreen('settings');setError('');}}>設定</button></div></header>
       <div className="week-strip">{week.map(h=><button key={h.day} disabled={h.day>today()||h.day<since}onClick={()=>chooseDay(h.day,true)} aria-label={h.day+' 的紀錄'}><div className={'week-ring '+(h.day===day?'selected':'')}><i style={{height:Math.min(100,h.kcal/settings.goal*100)+'%',background:h.kcal>settings.goal?'var(--peach)':'var(--purple)'}}/></div><small>{h.day===today()?'今':'日一二三四五六'[new Date(h.day+'T12:00:00').getDay()]}</small></button>)}</div>
-      <section className="summary"><div className="total"><strong>{fmt(sum)}</strong><span>kcal {day===today()?'今天':day.slice(5).replace('-','/')}</span></div><div className="progress"><i style={{width:Math.min(100,sum/settings.goal*100)+'%',background:remaining<0?'var(--peach)':'var(--purple)'}}/></div><div className="summary-labels"><span>目標 {fmt(settings.goal)}</span><span>{remaining>=0?'距離目標 '+fmt(remaining):'超過目標 '+fmt(-remaining)}</span></div>{dayNutrients&&meals.length>0&&<NutrientTotals totals={dayNutrients} count={meals.reduce((n,m)=>n+m.items.length,0)}/>}</section>
+      <section className="summary"><div className="total"><strong>{fmt(sum)}</strong><span>kcal {day===today()?'今天':day.slice(5).replace('-','/')}</span></div><div className="progress"><i style={{width:Math.min(100,sum/settings.goal*100)+'%',background:remaining<0?'var(--peach)':'var(--purple)'}}/></div><div className="summary-labels"><span>目標 {fmt(settings.goal)}</span><span>{remaining>=0?'距離目標 '+fmt(remaining):'超過目標 '+fmt(-remaining)}</span></div>{dayNutrients&&meals.length>0&&<NutrientTotals totals={dayNutrients} count={meals.reduce((n,m)=>n+m.items.length,0)} goals={goalsSince&&day>=goalsSince?goals:undefined}/>}</section>
       <div className="timeline scroll">
         {!!jobs.length&&<><button className="notice jobs-banner" onClick={()=>setJobsOpen(o=>!o)}>{[['running','筆辨識中'],['done','筆已自動記錄'],['error','筆失敗']].filter(([k])=>jobCount(k)).map(([k,t])=>jobCount(k)+' '+t).join('・')} {jobsOpen?'▴':'▾'}</button>
           {jobsOpen&&<div className="job-list">{jobs.map(j=>{const d=new Date(j.createdAt);return <div className="job-row" key={j.id}><time>{(today(d)===today()?'':today(d).slice(5).replace('-','/')+' ')+d.toTimeString().slice(0,5)}</time><span>{[j.hasPhoto&&'照片',j.text].filter(Boolean).join('・')}</span><small>{{running:j.kind==='relookup'?'查詢中':'辨識中',done:j.kind==='relookup'?'已更新':'已記錄',error:'失敗'}[j.status]}</small>

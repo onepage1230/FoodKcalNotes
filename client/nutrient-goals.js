@@ -29,6 +29,19 @@ export function suggestedGoals(plan, kcal) {
   };
 }
 
+// 當日狀態（ADR 0010「目標與提示」）：只在有把握時提示。total = { known, unknown }（未知是項目數），goal = { type, min, max }。
+// ok 達標、low 不足、maybeLow 可能不足、outOfRange 超出範圍、over 超標、unknown 無法判斷（不提示）。
+// 未知項目只會讓真實總量變大：已知超過上限一定超標；已知未達下限時有未知只能說「可能」不足。
+// 有未知項目且已知未超上限時，上方是否超過無從得知，所以有上限的目標（上限、範圍）不說達標。
+export function goalStatus(total, goal) {
+  const { known, unknown } = total || {}; const lo = goal?.min ?? null, hi = goal?.max ?? null;
+  if (!goal || !Number.isFinite(known) || (goal.type === 'min' ? lo : goal.type === 'max' ? hi : lo ?? hi) === null) return 'unknown';
+  if (goal.type !== 'min' && hi !== null && known > hi) return goal.type === 'max' ? 'over' : 'outOfRange';
+  if (goal.type !== 'max' && lo !== null && known < lo) return unknown > 0 ? 'maybeLow' : 'low';
+  return unknown > 0 && hi !== null ? 'unknown' : 'ok';
+}
+export const GOAL_STATUS_TEXT = { ok: '達標', low: '不足', maybeLow: '可能不足', outOfRange: '超出範圍', over: '超標', unknown: '' };
+
 // 實際目標 = 覆寫值 ?? 建議值；覆寫以整項為單位（範圍型 min、max 一起覆寫）。
 export function nutrientGoals(plan, kcal, overrides = {}) {
   const suggested = suggestedGoals(plan, kcal);

@@ -151,6 +151,8 @@ export function createJournal(filename, { foods: shared = null } = {}) {
   db.prepare("UPDATE jobs SET status='error', error=? WHERE status='running'").run('伺服器重新啟動，請重試。');
   const getMeta = key => db.prepare('SELECT value FROM meta WHERE key=?').get(key)?.value ?? '';
   const setMeta = (key, value) => db.prepare('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, String(value));
+  // 營養目標上線日期（伺服器本地日期）：第一次開啟時寫入，已存在不覆蓋；之前的日子不套用目標與提示。各日誌（含朋友）各自記錄。
+  if (!getMeta('nutrientGoalsSince')) { const now = new Date(); setMeta('nutrientGoalsSince', new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10)); }
   function foods(query = '') {
     const all = db.prepare('SELECT id,data FROM foods ORDER BY name').all().map(row => ({ ...JSON.parse(row.data), id: row.id }));
     const q = normalize(query);
