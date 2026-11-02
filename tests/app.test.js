@@ -646,21 +646,27 @@ test('Claude 金鑰：先驗證再保存；無效／網路失敗回 400 不保�
   texts.push(await (await providers(f)).text(), await (await f.request('/api/status')).text());
   for (const text of texts) assert.equal(text.includes(key), false);
 });
-test('背景分析自動存檔後，補估的營養素出現在餐點中並標「估」，熱量不變；補估失敗不影響存檔', async t => {
+test('背景分析自動存檔後，補估的營養素出現在餐點中並標「估」，熱量不變；寫回食物庫後不再補估；補估失敗不影響存檔', async t => {
   const f = await fixture(t);
   f.journal.putFood({ name: '補估飯', kcalPer100g: 130, source: 'manual' });
+  f.journal.putFood({ name: '補估麵', kcalPer100g: 140, source: 'manual' });
   const fill = { proteinPer100g: 2.5, fatPer100g: 0.3, carbsPer100g: 28, sugarPer100g: 0, sodiumMgPer100g: 1 };
   const isFill = body => JSON.stringify(body).includes('nutrient_fill');
-  const recognition = JSON.stringify({ name: '補估餐', items: [{ name: '補估飯', grams: 100 }] });
-  f.calls.reply = body => isFill(body) ? JSON.stringify({ items: [{ id: JSON.parse(body.input[0].content).items[0].id, ...fill }] }) : recognition;
+  const recognition = name => JSON.stringify({ name: '補估餐', items: [{ name, grams: 100 }] });
+  f.calls.reply = body => isFill(body) ? JSON.stringify({ items: [{ id: JSON.parse(body.input[0].content).items[0].id, ...fill }] }) : recognition('補估飯');
   const job = await f.analyze({ model: 'gpt-5.6-terra', text: '飯', fallback: 'llm' });
   assert.equal(job.status, 'done'); assert.equal(f.calls.responses.length, 2);
   const meal = await (await f.request('/api/meals/' + job.mealId)).json();
   assert.equal(meal.items[0].kcalPer100g, 130); assert.equal(meal.items[0].proteinPer100g, 2.5); assert.equal(meal.items[0].estimated.length, 5);
   assert.deepEqual(job.result.warnings, []);
-  f.calls.reply = body => isFill(body) ? '不是 JSON' : recognition;
-  const failed = await f.analyze({ model: 'gpt-5.6-terra', text: '飯', fallback: 'llm' });
+  // 補估結果已帶「估」寫回食物庫（ADR 0010）：再記同一種食物只需辨識一次呼叫。
+  const food = f.journal.foods('補估飯')[0];
+  assert.equal(food.kcalPer100g, 130); assert.equal(food.proteinPer100g, 2.5); assert.equal(food.estimated.length, 5);
+  const again = await f.analyze({ model: 'gpt-5.6-terra', text: '飯', fallback: 'llm' });
+  assert.equal(again.status, 'done'); assert.equal(f.calls.responses.length, 3);
+  f.calls.reply = body => isFill(body) ? '不是 JSON' : recognition('補估麵');
+  const failed = await f.analyze({ model: 'gpt-5.6-terra', text: '麵', fallback: 'llm' });
   assert.equal(failed.status, 'done'); assert.equal(failed.result.warnings.length, 1);
   const kept = await (await f.request('/api/meals/' + failed.mealId)).json();
-  assert.equal(kept.items[0].kcalPer100g, 130); assert.equal(kept.items[0].proteinPer100g, null);
+  assert.equal(kept.items[0].kcalPer100g, 140); assert.equal(kept.items[0].proteinPer100g, null);
 });
