@@ -270,7 +270,7 @@ test('工作每本日誌最多保留最新 20 筆', () => {
   assert.deepEqual(db.listJobs().map(j => j.id), ids.slice(2).reverse()); db.close();
 });
 test('單項 AI 估算：名稱跑完整分析，拆成多項並各自估份量', async t => {
-  const f = await fixture(t); f.journal.putFood({name:'測試飯',kcalPer100g:130,source:'manual'});
+  const f = await fixture(t); f.journal.putFood({name:'測試飯',kcalPer100g:130,source:'manual',proteinPer100g:2.7,fatPer100g:0.3,carbsPer100g:28,sugarPer100g:0,sodiumMgPer100g:1});
   const estimate = body => f.request('/api/estimate', {model:'gpt-5.6-terra',fallback:'llm',...body});
   assert.equal((await estimate({name:''})).status,400);
   assert.equal((await estimate({name:'測試飯',model:'gpt-6-astra'})).status,400);
@@ -540,7 +540,7 @@ test('providersReady：只有 Claude 金鑰也能分析；請求的空 model 不
 
 test('服務順序：第一個啟用者優先；停用者跳過；ChatGPT 429／400 改用 Claude 並加註；404 不換服務', async t => {
   const claude = claudeMock(); const f = await fixture(t, { anthropicFactory: claude.factory });
-  f.journal.putFood({ name: '測試飯', kcalPer100g: 130, source: 'manual' });
+  f.journal.putFood({ name: '測試飯', kcalPer100g: 130, source: 'manual', proteinPer100g: 2.7, fatPer100g: 0.3, carbsPer100g: 28, sugarPer100g: 0, sodiumMgPer100g: 1 });
   // Claude 停用：ChatGPT 額度錯誤照舊直接失敗。
   await providers(f, { providers: [{ id: 'chatgpt', enabled: true }, { id: 'claude', enabled: false }], claudeApiKey: 'sk-ant-test-fake-0000' });
   f.calls.status = 429;
@@ -613,4 +613,22 @@ test('Claude 金鑰：先驗證再保存；無效／網路失敗回 400 不保�
   assert.equal(f.store.data.providers[0].apiKey, ''); assert.equal('keyAddedAt' in f.store.data.providers[0], false);
   texts.push(await (await providers(f)).text(), await (await f.request('/api/status')).text());
   for (const text of texts) assert.equal(text.includes(key), false);
+});
+test('背景分析自動存檔後，補估的營養素出現在餐點中並標「估」，熱量不變；補估失敗不影響存檔', async t => {
+  const f = await fixture(t);
+  f.journal.putFood({ name: '補估飯', kcalPer100g: 130, source: 'manual' });
+  const fill = { proteinPer100g: 2.5, fatPer100g: 0.3, carbsPer100g: 28, sugarPer100g: 0, sodiumMgPer100g: 1 };
+  const isFill = body => JSON.stringify(body).includes('nutrient_fill');
+  const recognition = JSON.stringify({ name: '補估餐', items: [{ name: '補估飯', grams: 100 }] });
+  f.calls.reply = body => isFill(body) ? JSON.stringify({ items: [{ id: JSON.parse(body.input[0].content).items[0].id, ...fill }] }) : recognition;
+  const job = await f.analyze({ model: 'gpt-5.6-terra', text: '飯', fallback: 'llm' });
+  assert.equal(job.status, 'done'); assert.equal(f.calls.responses.length, 2);
+  const meal = await (await f.request('/api/meals/' + job.mealId)).json();
+  assert.equal(meal.items[0].kcalPer100g, 130); assert.equal(meal.items[0].proteinPer100g, 2.5); assert.equal(meal.items[0].estimated.length, 5);
+  assert.deepEqual(job.result.warnings, []);
+  f.calls.reply = body => isFill(body) ? '不是 JSON' : recognition;
+  const failed = await f.analyze({ model: 'gpt-5.6-terra', text: '飯', fallback: 'llm' });
+  assert.equal(failed.status, 'done'); assert.equal(failed.result.warnings.length, 1);
+  const kept = await (await f.request('/api/meals/' + failed.mealId)).json();
+  assert.equal(kept.items[0].kcalPer100g, 130); assert.equal(kept.items[0].proteinPer100g, null);
 });

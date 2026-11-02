@@ -49,7 +49,7 @@ test('sameAs 命中食物庫時不使用估算的營養素，使用庫裡的資�
   const result = await analyzeMeal({ text: '一罐加多寶', photo: '', fallback: 'llm', journal: db, emit() {}, infer: async () =>
     answer(calls++ === 0 ? canned : { sameAs: id, kcalPer100g: 999, ...nutr }) });
   const hit = result.items[0];
-  assert.equal(calls, 2); assert.equal(hit.matched, true); assert.equal(hit.kcalPer100g, 34); assert.equal(hit.proteinPer100g, 0.2);
+  assert.equal(calls, 3); assert.equal(hit.matched, true); assert.equal(hit.kcalPer100g, 34); assert.equal(hit.proteinPer100g, 0.2);
   assert.equal(hit.carbsPer100g, null); assert.deepEqual(hit.estimated, []); db.close();
 });
 test('判斷為不同種時照常使用估算的營養素', async () => {
