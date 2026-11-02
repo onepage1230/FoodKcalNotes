@@ -15,6 +15,7 @@ npm run build                              # vite build → dist/（npm start �
 npm start                                  # http://127.0.0.1:3000，PORT 可覆寫
 npm run dev                                # Vite middleware 模式；拒絕所有遠端（Tailscale）要求
 npm run import-foods -- data/xxx.json [--dry-run]
+npm run fill-nutrients -- data/tfda-common.json [--dry-run]   # 用內附資料補既有食物庫的營養素（Docker 要在容器內執行）
 docker-compose up -d --build               # 見 README「Docker／群暉 NAS 部署」
 ```
 
@@ -45,6 +46,8 @@ docker-compose up -d --build               # 見 README「Docker／群暉 NAS �
 - 熱量 = 克數 × 每100g熱量 ÷ 100，由程式計算（`journal.js` 的 `kcal`、前端 `energy`），模型只給克數與每100g熱量，不給總熱量。
 - 每項都有 `source`：`label`／本機庫（`matched`）／`web`／`llm`。只有引用經驗證的才能標 `web`。
 - 食物庫快取：未經修改的 `web` 與 `label` 結果保存時寫入，同名不覆蓋；背景自動存檔的 `llm` 估算與使用者改過的項目不寫入；朋友日誌預設不寫入。
+- 營養素（蛋白質、脂肪、碳水、糖、鈉，每 100g）：`null` 是未知，不等於 0；總計回傳已知總量與未知數（顯示「至少」）。補估呼叫只填營養素、不改熱量，補的欄位列入 `estimated`（畫面標「估」）。`web` 的營養素只取與熱量同一個被引用的來源；引用驗證失敗降級為 `llm` 時，回應中的營養素全部捨棄。
+- 營養素的食物庫快取例外（`journal.js` 的 `mergeNutrients`）：庫裡 `null` 的欄位可被補上；`estimated` 的欄位只能被有出處（非命中的 `web`／`label`）的值覆蓋；有出處的永不覆蓋；熱量、名稱、來源不動。使用者改過營養素的項目（`nutrientsEdited`）與預設的朋友日誌不寫入。連勝只看熱量，不看營養素。
 - 日期、時間、用餐時段（`mealTimeContext`）、連勝的「今天」都用**伺服器本地時間**，容器內必須設 `TZ`。
 
 ## 慣例
