@@ -7,7 +7,7 @@ import { createJournal, conflicts } from '../server/journal.js';
 import { analyzeMeal, collectResponse } from '../server/food-analysis.js';
 import { retryOnTimeout } from '../server/food-routes.js';
 
-const rice = { name: '測試熟飯', aliases: ['測試白飯'], kcalPer100g: 130, source: 'manual', notes: '僅測試 fixture' };
+const rice = { name: '測試熟飯', aliases: ['測試白飯'], kcalPer100g: 130, source: 'manual', proteinPer100g: 2.7, fatPer100g: 0.3, carbsPer100g: 28, sugarPer100g: 0, sodiumMgPer100g: 1, notes: '僅測試 fixture' };
 const recognized = { name: '測試午餐', note: '重量為估計', items: [{ name: '測試白飯', grams: 200, aliases: [], confidence: 'medium', portionNote: '估計200g' }] };
 const answer = data => ({ text: JSON.stringify(data), searched: false, citations: [] });
 const baseMeal = () => ({ name: '測試餐', day: '2026-10-02', time: '12:30', photo: '', items: [{ ...rice, source: 'web', grams: 200, cache: true }] });
@@ -80,12 +80,12 @@ test('資料庫未命中時估算；確認前不寫入；之後仍保留 LLM 來
   const hit = db.findFood(['測試白飯']); assert.equal(hit.source, 'llm'); assert.equal(hit.kcalPer100g, 150); db.close();
 });
 test('照片營養標示直接使用，不查熱量；無效值照常查', async () => {
-  for (const [label, source, n] of [[45, 'label', 1], [2000, 'llm', 2], ['45', 'llm', 2]]) {
+  for (const [label, source, n] of [[45, 'label', 2], [2000, 'llm', 2], ['45', 'llm', 2]]) {
     const db = createJournal(':memory:'); db.putFood(rice); let calls = 0;
     const result = await analyzeMeal({ text: '一瓶測試飲料', photo: '', fallback: 'llm', journal: db, emit() {}, infer: async () =>
       answer(calls++ === 0 ? { name: '飲料', items: [{ name: '測試飲料', grams: 250, labelKcalPer100g: label }] } : { kcalPer100g: 50, notes: '估算' }) });
     assert.equal(calls, n); assert.equal(result.items[0].source, source); assert.equal(result.items[0].grams, 250);
-    if (n === 1) { assert.equal(result.items[0].kcalPer100g, 45); db.saveMeal({ ...baseMeal(), items: result.items }); assert.equal(db.findFood(['測試飲料']).source, 'label'); }
+    if (source === 'label') { assert.equal(result.items[0].kcalPer100g, 45); db.saveMeal({ ...baseMeal(), items: result.items }); assert.equal(db.findFood(['測試飲料']).source, 'label'); }
     db.close();
   }
 });
@@ -142,7 +142,7 @@ test('真實搜尋引用才標記為 web；虛構引用退回估算', async () =
         citations: [{ url: cited, title: '測試來源' }] }; }
       return answer({ kcalPer100g: 140, notes: '估算' });
     } });
-    assert.equal(result.items[0].source, valid ? 'web' : 'llm'); assert.equal(calls, valid ? 2 : 3);
+    assert.equal(result.items[0].source, valid ? 'web' : 'llm'); assert.equal(calls, 3);
     if (valid) assert.equal(result.items[0].sourceUrl, 'https://example.org/nutrition');
     db.close();
   }
@@ -228,7 +228,7 @@ test('SSE 蒐集已完成 output、網路引用與中斷拒絕', async () => {
   assert.equal(result.searched, true); assert.equal(result.citations.length, 1);
   await assert.rejects(collectResponse(new Response('data: {"type":"response.output_text.delta","delta":"partial"}\n\n').body), /中斷/);
 });
-const tea = { name: '加多寶涼茶（含糖）', aliases: ['加多寶植物飲料'], kcalPer100g: 34, source: 'manual' };
+const tea = { name: '加多寶涼茶（含糖）', aliases: ['加多寶植物飲料'], kcalPer100g: 34, source: 'manual', proteinPer100g: 0, fatPer100g: 0, carbsPer100g: 8, sugarPer100g: 8, sodiumMgPer100g: 3 };
 const canned = { name: '測試餐', items: [{ name: '加多寶有糖罐裝涼茶', aliases: ['加多寶罐裝涼茶'], grams: 310, confidence: 'high', portionNote: '一罐' }] };
 test('互斥詞：有糖/無糖、炸/蒸、否定詞不誤判', () => {
   assert.equal(conflicts('加多寶無糖涼茶', '加多寶涼茶（含糖）'), true);
