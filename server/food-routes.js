@@ -56,7 +56,7 @@ export function attachFoodRoutes(app, { requireProvider, providerChain, running,
     };
     return { infer, servedBy, tag, signal: controller.signal, abort: () => controller.abort(), done: () => running.delete(controller) };
   }
-  app.get('/api/journal', (req, res) => res.json({ meals: req.journal.meals(req.query.day), week: req.journal.week(req.query.day), settings: req.journal.preferences(), since: req.journal.stats().firstDay,
+  app.get('/api/journal', (req, res) => res.json({ meals: req.journal.meals(req.query.day), dayNutrients: req.journal.dayNutrients(req.query.day), week: req.journal.week(req.query.day), settings: req.journal.preferences(), since: req.journal.stats().firstDay,
     streak: req.journal.streak(validDate(req.query.today) ? req.query.today : new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)) }));
   app.get('/api/meals/:id', (req, res) => { const meal = req.journal.meal(req.params.id); res.status(meal ? 200 : 404).json(meal || { error: '找不到餐點。' }); });
   app.post('/api/meals', (req, res) => res.json(req.journal.saveMeal(req.body, { shareFoods: shareFoods(req) })));

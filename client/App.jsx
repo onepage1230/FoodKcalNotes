@@ -64,7 +64,7 @@ export default function App() {
   const [screen,setScreen]=useState('home');
   const [status,setStatus]=useState(null); const [models,setModels]=useState([]);
   const [settings,setSettings]=useState({goal:1800,fallback:'web',model:''});
-  const [day,setDay]=useState(today); const [meals,setMeals]=useState([]); const [week,setWeek]=useState([]); const [since,setSince]=useState(''); const [streak,setStreak]=useState(0);
+  const [day,setDay]=useState(today); const [meals,setMeals]=useState([]); const [week,setWeek]=useState([]); const [since,setSince]=useState(''); const [streak,setStreak]=useState(0); const [dayNutrients,setDayNutrients]=useState(null);
   const [text,setText]=useState(''); const [photo,setPhoto]=useState('');
   const [draft,setDraft]=useState(null); const [detail,setDetail]=useState(null); const [steps,setSteps]=useState([]); const [estimating,setEstimating]=useState([]); const [relookups,setRelookups]=useState([]);
   const [busy,setBusy]=useState(false); const [jobId,setJobId]=useState(null); const [jobs,setJobs]=useState([]); const [jobsOpen,setJobsOpen]=useState(false); const [saving,setSaving]=useState(false); const [error,setError]=useState(''); const [toast,setToast]=useState('');
@@ -89,7 +89,7 @@ export default function App() {
   const notify=message=>{setToast(message);};
   useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(''),3500);return()=>clearTimeout(t);},[toast]);
   async function loadJournal(date=day,keepWeek) {
-    const data=await api('/api/journal?day='+date+'&today='+today());setMeals(data.meals);if(!keepWeek)setWeek(data.week);setSince(data.since||today());setStreak(data.streak);setSettings(data.settings);setGoalInput(String(data.settings.goal));
+    const data=await api('/api/journal?day='+date+'&today='+today());setMeals(data.meals);if(!keepWeek)setWeek(data.week);setSince(data.since||today());setStreak(data.streak);setDayNutrients(data.dayNutrients);setSettings(data.settings);setGoalInput(String(data.settings.goal));
     return data;
   }
   async function loadAccount() {
@@ -228,7 +228,7 @@ export default function App() {
     {screen==='home'&&<div className="screen home swipe" {...swipe(dir=>dir>0?day>since&&shiftDay(-1):day<today()?shiftDay(1):()=>{setScreen('settings');setError('');})}>
       <header><button onClick={()=>{const n=window.prompt('日誌名稱（顯示為「○○的飲食日誌」）',settings.name||'我');if(n!==null)changeSetting({name:n});}}><b>{settings.name||'我'}的飲食日誌</b></button><button className={'streak'+(streak?'':' off')} onClick={()=>notify(streak?`連續 ${streak} 天有記錄且未超過目標`:'今天記錄且不超標就能開始連勝')} aria-label={'連勝 '+streak+' 天'}><Flame/>{streak}</button><div className="header-actions">{status?.admin&&<button className="text-button" onClick={()=>{setScreen('admin');setError('');}}>管理</button>}<button className="text-button" onClick={()=>{setScreen('history');setError('');}}>飲食紀錄</button><button className="text-button" onClick={()=>{setScreen('settings');setError('');}}>設定</button></div></header>
       <div className="week-strip">{week.map(h=><button key={h.day} disabled={h.day>today()||h.day<since}onClick={()=>chooseDay(h.day,true)} aria-label={h.day+' 的紀錄'}><div className={'week-ring '+(h.day===day?'selected':'')}><i style={{height:Math.min(100,h.kcal/settings.goal*100)+'%',background:h.kcal>settings.goal?'var(--peach)':'var(--purple)'}}/></div><small>{h.day===today()?'今':'日一二三四五六'[new Date(h.day+'T12:00:00').getDay()]}</small></button>)}</div>
-      <section className="summary"><div className="total"><strong>{fmt(sum)}</strong><span>kcal {day===today()?'今天':day.slice(5).replace('-','/')}</span></div><div className="progress"><i style={{width:Math.min(100,sum/settings.goal*100)+'%',background:remaining<0?'var(--peach)':'var(--purple)'}}/></div><div className="summary-labels"><span>目標 {fmt(settings.goal)}</span><span>{remaining>=0?'距離目標 '+fmt(remaining):'超過目標 '+fmt(-remaining)}</span></div></section>
+      <section className="summary"><div className="total"><strong>{fmt(sum)}</strong><span>kcal {day===today()?'今天':day.slice(5).replace('-','/')}</span></div><div className="progress"><i style={{width:Math.min(100,sum/settings.goal*100)+'%',background:remaining<0?'var(--peach)':'var(--purple)'}}/></div><div className="summary-labels"><span>目標 {fmt(settings.goal)}</span><span>{remaining>=0?'距離目標 '+fmt(remaining):'超過目標 '+fmt(-remaining)}</span></div>{dayNutrients&&meals.length>0&&<NutrientTotals totals={dayNutrients} count={meals.reduce((n,m)=>n+m.items.length,0)}/>}</section>
       <div className="timeline scroll">
         {!!jobs.length&&<><button className="notice jobs-banner" onClick={()=>setJobsOpen(o=>!o)}>{[['running','筆辨識中'],['done','筆已自動記錄'],['error','筆失敗']].filter(([k])=>jobCount(k)).map(([k,t])=>jobCount(k)+' '+t).join('・')} {jobsOpen?'▴':'▾'}</button>
           {jobsOpen&&<div className="job-list">{jobs.map(j=>{const d=new Date(j.createdAt);return <div className="job-row" key={j.id}><time>{(today(d)===today()?'':today(d).slice(5).replace('-','/')+' ')+d.toTimeString().slice(0,5)}</time><span>{[j.hasPhoto&&'照片',j.text].filter(Boolean).join('・')}</span><small>{{running:j.kind==='relookup'?'查詢中':'辨識中',done:j.kind==='relookup'?'已更新':'已記錄',error:'失敗'}[j.status]}</small>
