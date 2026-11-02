@@ -28,3 +28,17 @@ export function nutrientTotals(items) {
     return [total, { known: round(known, unit), unknown }];
   }));
 }
+
+// 一致性檢查（ADR 0010）：|熱量 − (蛋白質×4 + 碳水×4 + 脂肪×9)| ÷ 熱量。
+// 門檻與最低熱量由食藥署資料決定；熱量太低時相對誤差會放大，不檢查。
+export const KCAL_MISMATCH_THRESHOLD = 0.25;
+export const KCAL_MISMATCH_MIN_KCAL = 50;
+
+// 回傳 { ratio, exceeds }；三大營養素有任一未知或熱量低於最低值時回傳 null（不檢查）。
+export function kcalMismatch(item) {
+  const kcal = nutrientValue(item.kcalPer100g);
+  const p = nutrientValue(item.proteinPer100g); const c = nutrientValue(item.carbsPer100g); const f = nutrientValue(item.fatPer100g);
+  if (kcal === null || p === null || c === null || f === null || kcal < KCAL_MISMATCH_MIN_KCAL) return null;
+  const ratio = Math.abs(kcal - (p * 4 + c * 4 + f * 9)) / kcal;
+  return { ratio, exceeds: ratio > KCAL_MISMATCH_THRESHOLD };
+}

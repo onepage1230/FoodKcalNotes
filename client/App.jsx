@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import Admin from './Admin.jsx';
 import { planGoal } from './plan.js';
 import { NUTRIENT_GOALS, nutrientGoals } from './nutrient-goals.js';
-import { NUTRIENTS, nutrientValue, nutrientTotals } from './nutrients.js';
+import { NUTRIENTS, nutrientValue, nutrientTotals, kcalMismatch } from './nutrients.js';
 
 const fmt = n => Math.round(n).toLocaleString('en-US');
 const energy = i => Math.round(i.grams * i.kcalPer100g / 100);
@@ -263,6 +263,7 @@ export default function App() {
         {draft.items.map((item,index)=><div className="draft-item" key={item.id}>
           <div className="food-name"><input aria-label={'食物名稱 '+(index+1)} value={item.name} onChange={e=>editItem(index,{name:e.target.value,cache:false,source:'manual',matched:false,foodId:'',sourceUrl:'',sourceTitle:'',aliases:[]})} placeholder="食物名稱"/><button className="remove" aria-label={'移除 '+item.name} onClick={()=>setDraft(d=>({...d,items:d.items.filter((_,i)=>i!==index)}))}>✕</button></div>
           {source(item)}<div className="food-numbers"><label>重量 g<input aria-label={'重量 '+(index+1)} type="number" inputMode="numeric" min="1" max="5000" step="1" value={item.grams} onChange={e=>editItem(index,{grams:e.target.value})}/></label><label>kcal / 100g<input aria-label={'每100g熱量 '+(index+1)} type="number" inputMode="decimal" min="0" max="1000" step="0.1" value={item.kcalPer100g} onChange={e=>editItem(index,{kcalPer100g:e.target.value,cache:false,source:'manual',matched:false,foodId:'',sourceUrl:'',sourceTitle:'',notes:'使用者手動調整熱量。'})}/></label><strong>{fmt(energy(item))}<small> kcal</small></strong></div>
+          {(m=>m?.exceeds&&<p className="match-note" role="status">熱量與營養素換算差距 {Math.round(m.ratio*100)}%，請確認是否把每份當成每 100g。</p>)(kcalMismatch(item))}
           <details className="nutrients"><summary>營養素 <small className="muted">{NUTRIENTS.filter(n=>nutrientValue(item[n.key])!==null).length}/5 項有資料{item.estimated?.length?' · 含估算':''}</small></summary><div className="nutrient-grid">{NUTRIENTS.map(({key,label,unit,max})=><label key={key}><span>{label} {unit}/100g{item.estimated?.includes(key)&&<span className="source llm">估</span>}</span><input aria-label={label+' '+(index+1)} type="number" inputMode="decimal" min="0" max={max} step={unit==='mg'?1:0.1} placeholder="未知" value={item[key]??''} onChange={e=>editNutrient(index,key,e.target.value)}/></label>)}</div></details>
           {!Number(item.kcalPer100g)&&item.name.trim()&&<button className="outline full" disabled={estimating.includes(item.id)} onClick={()=>estimate(item)}>{estimating.includes(item.id)?'估算中…':'AI 估算'}</button>}
           {item.name.trim()&&<button className="outline full" disabled={estimating.includes(item.id)||relookups.some(r=>r.itemId===item.id)} onClick={()=>relookup(item)}>{relookups.some(r=>r.itemId===item.id)?'查詢中…可以先離開':'以新名稱重新查詢'}</button>}
