@@ -12,6 +12,7 @@ start.local.bat
 master.key
 *.tmp
 .env.*
+!.env.example
 *.pem
 .claude/
 .vscode/

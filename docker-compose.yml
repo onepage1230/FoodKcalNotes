@@ -1,0 +1,18 @@
+version: "3.8"
+
+# 伺服器只監聽 127.0.0.1，所以必須用 host 網路；手機經主機上的 Tailscale serve 連入。
+# 設定放在同資料夾的 .env（見 .env.example）。
+services:
+  foodkcal:
+    build: .
+    image: foodkcalnotes:local
+    network_mode: host
+    user: "1000:1000"
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      MEAL_JOURNAL_DATA_DIR: /data
+      REMOTE_ORIGINS: ${REMOTE_ORIGINS}
+      OWNER_LOGIN: ${OWNER_LOGIN}
+    volumes:
+      - ${DATA_DIR:-./data-store}:/data

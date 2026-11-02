@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.claude
+.env
+.env.*
+*.sqlite
+*.sqlite-*
+credentials.json
+master.key
+docs
+tests
