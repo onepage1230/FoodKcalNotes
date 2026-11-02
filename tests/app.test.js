@@ -167,6 +167,7 @@ test('飲食 API 傳入圖片並遵守 Responses contract，保存後可查日�
   await f.request('/api/meals',{...draft,day:'2026-10-05',time:'08:00',photo:''});
   const journal = await (await f.request('/api/journal?day=2026-10-02')).json();
   assert.equal(journal.meals.length,1); assert.equal(journal.since,'2026-10-02');
+  assert.deepEqual(Object.keys(journal.dayNutrients),['protein','fat','carbs','sugar','sodiumMg']); assert.equal(journal.dayNutrients.protein.unknown,1);
   assert.equal((await (await f.request('/api/journal?day=2026-10-02&today=2026-10-05')).json()).streak,1);
 });
 test('背景分析工作：立即回 id、跑完存結果、只列目前日誌、可刪除；模型錯誤記為 error', async t => {
