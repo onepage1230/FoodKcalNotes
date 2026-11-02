@@ -118,6 +118,35 @@ ChatGPT 登入憑證與 Claude API key 只保存在電腦上的 `credentials.jso
 
 ChatGPT 登入與 AI 服務設定只能在電腦上操作；手機可以記錄、查看與修改餐點。
 
+## Docker／群暉 NAS 部署
+
+想讓服務常駐、不依賴筆電開機時，可以用 Docker 跑在 NAS 或 Linux 主機上。已在 Synology DS920+（DSM 7.1、`docker-compose` 1.28）實測。
+
+1. 取得專案並建立設定：
+
+   ```sh
+   git clone https://github.com/<你的帳號>/FoodKcalNotes.git app && cd app
+   cp .env.example .env        # 填 REMOTE_ORIGINS、OWNER_LOGIN、DATA_DIR
+   sudo mkdir -p /volume1/docker/foodkcal/journal
+   sudo chown 1000:1000 /volume1/docker/foodkcal/journal && sudo chmod 700 /volume1/docker/foodkcal/journal
+   sudo docker-compose up -d --build
+   sudo docker-compose logs --tail 20      # 看到「飲食日誌 … 已啟動」即成功
+   ```
+
+2. 在主機上安裝 Tailscale，執行 `sudo tailscale serve --https=8443 --bg 3000`，手機開 `REMOTE_ORIGINS` 的網址（同上方「從手機使用」）。
+3. 更新：`git pull && sudo docker-compose up -d --build`。
+
+注意事項：
+
+- **`network_mode: host` 是必要的**：伺服器只監聽 127.0.0.1，一般的連接埠對應連不到。
+- **時區**：餐點的日期、時間與用餐時段都用伺服器本地時間，容器預設是 UTC（台北會慢 8 小時）。`docker-compose.yml` 預設 `TZ=Asia/Taipei`，可在 `.env` 加 `TZ=...` 覆寫。
+- **`DATA_DIR` 要指到獨立資料夾**，不能是專案內的 `data/`（那是內附的營養資料）；資料夾需由 uid 1000 擁有，否則啟動時 `chmod` 會報 `EPERM`。
+- **ChatGPT 登入要在 `127.0.0.1:3000` 完成**。主機沒有瀏覽器時，在電腦上開 SSH 隧道：`ssh -L 3000:127.0.0.1:3000 使用者@主機 -p <port>`，再開 `http://127.0.0.1:3000`。登入完成即可關閉。若只用 Claude API key，可直接在手機的設定頁貼上，不需要隧道。
+  - Synology 預設 `AllowTcpForwarding no`，需在 `/etc/ssh/sshd_config` **檔尾**加 `Match User <帳號>` 與 `AllowTcpForwarding yes`，先用 `sudo sshd -t` 檢查，再 `sudo synosystemctl restart sshd`。修改前先備份；DSM 更新或在介面改 SSH 設定時可能被覆寫。
+  - sshd 重啟後，**既有的 SSH 連線仍沿用舊設定**，要關掉重連；本機 3000 若還被舊的 `ssh` 佔用，新的轉發會失敗（`lsof -nP -iTCP:3000 -sTCP:LISTEN` 檢查）。
+  - 若 Mac 上有 Surge 等代理工具，連 127.0.0.1 出現怪狀時，用 `curl --noproxy '*'` 對照可以分辨是否被代理攔截。
+- 備份：`DATA_DIR` 內的 `meals.sqlite`（含 `-wal`、`-shm`）與明文的 `credentials.json`，備份目的地請選你信任的地方。
+
 ## 資料與食物庫
 
 - **本機食物庫**：存在日誌資料庫中；app 內唯讀，沒有新增／修改／刪除介面。

@@ -122,6 +122,35 @@ The service listens only on 127.0.0.1. To use it from your own phone, [Tailscale
 
 ChatGPT sign-in and AI service settings can only be changed on the computer; on your phone you can log, view, and edit meals.
 
+## Docker / Synology NAS deployment
+
+To keep the service always on without a laptop, run it with Docker on a NAS or Linux host. Tested on a Synology DS920+ (DSM 7.1, `docker-compose` 1.28).
+
+1. Get the project and create the config:
+
+   ```sh
+   git clone https://github.com/<your-account>/FoodKcalNotes.git app && cd app
+   cp .env.example .env        # fill in REMOTE_ORIGINS, OWNER_LOGIN, DATA_DIR
+   sudo mkdir -p /volume1/docker/foodkcal/journal
+   sudo chown 1000:1000 /volume1/docker/foodkcal/journal && sudo chmod 700 /volume1/docker/foodkcal/journal
+   sudo docker-compose up -d --build
+   sudo docker-compose logs --tail 20      # success once the startup banner appears
+   ```
+
+2. Install Tailscale on the host and run `sudo tailscale serve --https=8443 --bg 3000`; open the `REMOTE_ORIGINS` URL on your phone (same as "Using from your phone" above).
+3. Update: `git pull && sudo docker-compose up -d --build`.
+
+Notes:
+
+- **`network_mode: host` is required**: the server only listens on 127.0.0.1, so ordinary port mapping cannot reach it.
+- **Time zone**: meal date, time and meal-period all use the server's local time, and containers default to UTC (8 hours behind Taipei). `docker-compose.yml` defaults to `TZ=Asia/Taipei`; override with `TZ=...` in `.env`.
+- **`DATA_DIR` must be a separate folder**, not the repo's `data/` (bundled nutrition data), and owned by uid 1000, otherwise startup fails with `EPERM` on `chmod`.
+- **ChatGPT sign-in must be completed at `127.0.0.1:3000`**. On a host without a browser, open an SSH tunnel from your computer: `ssh -L 3000:127.0.0.1:3000 user@host -p <port>`, then open `http://127.0.0.1:3000`. Close it afterwards. If you only use a Claude API key, paste it in the phone's settings page; no tunnel needed.
+  - Synology defaults to `AllowTcpForwarding no`. Append `Match User <account>` and `AllowTcpForwarding yes` at the **end** of `/etc/ssh/sshd_config`, check with `sudo sshd -t`, then `sudo synosystemctl restart sshd`. Back it up first; DSM updates or changing SSH settings in the UI may overwrite it.
+  - After restarting sshd, **existing SSH sessions keep the old setting**: reconnect. If a stale `ssh` still holds local port 3000, the new forward fails (check with `lsof -nP -iTCP:3000 -sTCP:LISTEN`).
+  - If a proxy tool such as Surge interferes with 127.0.0.1, compare against `curl --noproxy '*'` to tell whether the proxy is intercepting.
+- Backup: `meals.sqlite` (with `-wal`, `-shm`) and the plaintext `credentials.json` in `DATA_DIR`; choose a backup destination you trust.
+
 ## Data & food library
 
 - **Local food library**: Stored in the journal database; read-only in the app, with no UI to add, edit, or delete entries.

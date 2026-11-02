@@ -10,6 +10,7 @@ services:
     user: "1000:1000"
     restart: unless-stopped
     environment:
+      TZ: ${TZ:-Asia/Taipei}   # 餐點日期、時間與用餐時段都用伺服器本地時間，容器預設是 UTC
       PORT: "3000"
       MEAL_JOURNAL_DATA_DIR: /data
       REMOTE_ORIGINS: ${REMOTE_ORIGINS}
