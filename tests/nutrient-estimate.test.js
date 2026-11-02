@@ -58,14 +58,13 @@ test('判斷為不同種時照常使用估算的營養素', async () => {
     answer(calls++ === 0 ? canned : { sameAs: null, kcalPer100g: 40, ...nutr }) });
   assert.equal(result.items[0].matched, false); assert.deepEqual(result.items[0].estimated, NK); db.close();
 });
-test('網路搜尋成功的項目本 ticket 不帶營養素（維持 null、estimated 空）', async () => {
+test('網路搜尋成功的項目採用來源營養素，不列入 estimated（ticket 04）', async () => {
   const url = 'https://example.org/nutrition'; const db = createJournal(':memory:'); let calls = 0;
   const result = await analyzeMeal({ text: '測試餐', photo: '', fallback: 'web', journal: db, emit() {}, infer: async body => {
     if (calls++ === 0) return answer(recognized);
-    assert.doesNotMatch(body.instructions, /蛋白質/);
     return { ...answer({ kcalPer100g: 135, sourceUrl: url, ...nutr }), searched: true, citations: [{ url, title: '測試來源' }] };
   } });
   const item = result.items[0]; assert.equal(item.source, 'web');
-  for (const k of NK) assert.equal(item[k], null, k);
+  for (const k of NK) assert.equal(item[k], nutr[k], k);
   assert.deepEqual(item.estimated, []); db.close();
 });

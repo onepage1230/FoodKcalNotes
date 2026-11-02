@@ -301,7 +301,7 @@ test('ChatGPT：辨識與估算帶 strict text.format（json_schema）；搜尋�
   assert.ok(f.calls.responses.every(b => !('schema' in b)));
   // 估算 schema 含五項可空的營養素欄位（ticket 03）；搜尋那次不帶。
   for (const k of ['proteinPer100g', 'fatPer100g', 'carbsPer100g', 'sugarPer100g', 'sodiumMgPer100g']) assert.deepEqual(estimate.text.format.schema.properties[k], { anyOf: [{ type: 'number' }, { type: 'null' }] }, k);
-  assert.doesNotMatch(search.instructions, /sodiumMgPer100g/); assert.match(estimate.instructions, /sodiumMgPer100g/);
+  assert.match(search.instructions, /sodiumMgPer100g/); assert.match(estimate.instructions, /sodiumMgPer100g/);
 });
 test('背景重新查詢：只查這一項並改寫已存餐點，保留重量與其他項', async t => {
   const f = await fixture(t, { chatgptShared: true }); f.journal.putFood({name:'滷排骨',kcalPer100g:220,source:'manual'});
