@@ -119,7 +119,8 @@ test('結構化輸出 schema 符合 strict 規則', () => {
   for (const { name, schema } of [RECOGNITION_SCHEMA, ESTIMATE_SCHEMA]) { assert.match(name, /^[a-z_]+$/); assert.equal(schema.type, 'object'); assertStrict(schema, name); }
   assert.deepEqual(Object.keys(RECOGNITION_SCHEMA.schema.properties.items.items.properties),
     ['name', 'aliases', 'grams', 'confidence', 'portionBasis', 'portionNote', 'labelKcalPer100g', 'labelProteinPer100g', 'labelFatPer100g', 'labelCarbsPer100g', 'labelSugarPer100g', 'labelSodiumMgPer100g']);
-  assert.deepEqual(Object.keys(ESTIMATE_SCHEMA.schema.properties), ['kcalPer100g', 'sourceUrl', 'sourceTitle', 'notes', 'servingGrams', 'sameAs']);
+  assert.deepEqual(Object.keys(ESTIMATE_SCHEMA.schema.properties), ['kcalPer100g', 'sourceUrl', 'sourceTitle', 'notes', 'servingGrams', 'sameAs',
+    'proteinPer100g', 'fatPer100g', 'carbsPer100g', 'sugarPer100g', 'sodiumMgPer100g']);
 });
 
 test('Claude：辨識與估算帶 output_config.format（json_schema）與 effort；搜尋不帶', async () => {
