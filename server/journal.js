@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { NUTRIENTS, NUTRIENT_KEYS, nutrientTotals } from '../client/nutrients.js';
+import { NUTRIENT_GOALS } from '../client/nutrient-goals.js';
 
 export const normalize = value => String(value).normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
 export const kcal = item => Math.round(item.grams * item.kcalPer100g / 100);
@@ -89,6 +90,22 @@ function validPlan(p) {
   const now = new Date(); const today = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   if (p.startDate !== undefined && (!validDate(p.startDate) || p.startDate > today)) throw bad('計劃開始日期不正確。');
   return { sex: p.sex, age: p.age, height: p.height, weight: p.weight, target: p.target, activity: p.activity, ...(p.startDate && { startDate: p.startDate }) };
+}
+// 營養目標覆寫：patch 合併到既有覆寫，單項 null 清除；欄位依類型（下限 min、上限 max、範圍兩者且 min ≤ max）。
+function validNutrientGoals(patch, current) {
+  const fail = () => { throw bad('營養目標不正確，請輸入合理範圍內的數字，範圍的下限不可大於上限。'); };
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) fail();
+  const next = { ...current };
+  for (const [key, value] of Object.entries(patch)) {
+    const goal = NUTRIENT_GOALS.find(g => g.total === key); if (!goal) fail();
+    if (value === null) { delete next[key]; continue; }
+    const fields = { min: ['min'], max: ['max'], range: ['min', 'max'] }[goal.type]; const [lo, hi] = goal.limit;
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).sort().join() !== [...fields].sort().join()
+      || fields.some(f => typeof value[f] !== 'number' || !Number.isFinite(value[f]) || value[f] < lo || value[f] > hi)
+      || (goal.type === 'range' && value.min > value.max)) fail();
+    next[key] = Object.fromEntries(fields.map(f => [f, value[f]]));
+  }
+  return next;
 }
 export function validPhoto(photo) {
   if (!photo) return '';
@@ -195,7 +212,7 @@ export function createJournal(filename, { foods: shared = null } = {}) {
   }
   function preferences() {
     const values = Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map(r => [r.key, JSON.parse(r.value)]));
-    return { goal: 1800, fallback: 'web', model: '', name: '我', plan: null, ...values };
+    return { goal: 1800, fallback: 'web', model: '', name: '我', plan: null, nutrientGoals: {}, ...values };
   }
   function updatePreferences(input) {
     const next = preferences();
@@ -210,6 +227,7 @@ export function createJournal(filename, { foods: shared = null } = {}) {
     if ('model' in input) next.model = text(input.model, 100);
     if ('name' in input) next.name = text(input.name, 12) || '我';
     if ('plan' in input) next.plan = input.plan === null ? null : validPlan(input.plan);
+    if ('nutrientGoals' in input) next.nutrientGoals = input.nutrientGoals === null ? {} : validNutrientGoals(input.nutrientGoals, next.nutrientGoals);
     for (const [key, value] of Object.entries(next)) db.prepare('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, JSON.stringify(value));
     return next;
   }

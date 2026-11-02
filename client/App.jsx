@@ -1,11 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Admin from './Admin.jsx';
 import { planGoal } from './plan.js';
+import { NUTRIENT_GOALS, nutrientGoals } from './nutrient-goals.js';
 import { NUTRIENTS, nutrientValue, nutrientTotals } from './nutrients.js';
 
 const fmt = n => Math.round(n).toLocaleString('en-US');
 const energy = i => Math.round(i.grams * i.kcalPer100g / 100);
 const total = items => items.reduce((sum, i) => sum + energy(i), 0);
+// 營養目標：類型與顯示文字（下限 ≥、範圍 a～b、上限 ≤）；null 表示缺資料無法計算。
+const GOAL_TYPE = { min: '下限', range: '範圍', max: '上限' };
+const goalNum = n => n === null || n === undefined ? '—' : Number.isInteger(n) ? fmt(n) : n.toFixed(1);
+const goalText = (type, g) => type === 'min' ? `≥ ${goalNum(g.min)}` : type === 'max' ? `≤ ${goalNum(g.max)}` : `${goalNum(g.min)}～${goalNum(g.max)}`;
 const fmtAmount = (n, unit) => unit === 'mg' || n >= 10 ? fmt(n) : n.toFixed(1);
 // 營養素總計：未知不當 0；有未知時顯示「至少 X」與未知項數，全部未知顯示「—」。
 const NutrientTotals = ({ totals, count }) => <div className="nutrient-totals">{NUTRIENTS.map(({ total: k, label, unit }) => { const t = totals[k];
@@ -70,7 +75,7 @@ export default function App() {
   const [busy,setBusy]=useState(false); const [jobId,setJobId]=useState(null); const [jobs,setJobs]=useState([]); const [jobsOpen,setJobsOpen]=useState(false); const [saving,setSaving]=useState(false); const [error,setError]=useState(''); const [toast,setToast]=useState('');
   const [foods,setFoods]=useState([]); const [query,setQuery]=useState(''); const [group,setGroup]=useState('全部'); const [picking,setPicking]=useState(false);
   const [providers,setProviders]=useState([]); const [claudeKey,setClaudeKey]=useState(null); // null：key 輸入框收起
-  const [goalInput,setGoalInput]=useState('1800'); const [planForm,setPlanForm]=useState(null); const [planStep,setPlanStep]=useState(1);
+  const [goalInput,setGoalInput]=useState('1800'); const [planForm,setPlanForm]=useState(null); const [planStep,setPlanStep]=useState(1); const [goalEdit,setGoalEdit]=useState(null);
   const [theme,setTheme]=useState(()=>{try{const v=localStorage.getItem('theme');return v==='light'||v==='dark'?v:'system';}catch{return 'system';}});
   const album=useRef(null); const threadEnd=useRef(null); const pane=useRef(null); const drag=useRef(null); const lastInput=useRef(null);
   const csrf=useRef(''); const active=status?.accounts.find(a=>a.client_id===status.activeId);
@@ -214,6 +219,9 @@ export default function App() {
   const planNums=Object.fromEntries(Object.entries(planInput).map(([k,v])=>[k,k==='sex'?v:Number(v)]));
   const plan=Object.values(planNums).every(v=>typeof v==='string'||v>0)?planGoal(planNums,settings.goal):null;
   const bodyOk=Number.isInteger(planNums.age)&&[['age',10,100],['height',100,230],['weight',25,300],['target',25,300]].every(([k,lo,hi])=>planNums[k]>=lo&&planNums[k]<=hi); // 同 server validPlan 範圍
+  // 營養目標：建議值依已存計劃與每日熱量目標即時計算；goalEdit 是正在覆寫的項目（輸入字串）。
+  const goals=nutrientGoals(settings.plan,settings.goal,settings.nutrientGoals||{});
+  function saveNutrientGoal(){const {key,...input}=goalEdit;const value=Object.fromEntries(Object.entries(input).map(([k,v])=>[k,String(v).trim()===''?NaN:Number(v)]));changeSetting({nutrientGoals:{[key]:value}},'營養目標已保存').then(ok=>ok&&setGoalEdit(null));}
   function commitGoal(value){const t=String(value).trim(),v=Number(t);if(!/^\d+$/.test(t)||v<500||v>10000){setGoalInput(String(settings.goal));setError('每日目標需為 500～10000 的整數 kcal。');return;}setGoalInput(String(v));if(v!==settings.goal)changeSetting({goal:v});}
   async function switchAccount(client_id){try{await api('/api/account',{client_id});const list=await loadAccount();await changeSetting({model:list[0]?.slug || ''});}catch(e){setError(e.message);}}
   async function logout(){setSaving(true);try{const result=await api('/api/logout',{});await loadAccount();notify(result.warning||'已登出');}catch(e){setError(e.message);}finally{setSaving(false);}}
@@ -295,6 +303,15 @@ export default function App() {
           <button className="primary full" onClick={()=>changeSetting({plan:{...planNums,startDate:planStart&&planNums.weight===settings.plan.weight?planStart:today()}},'減重計劃已儲存').then(ok=>ok&&setPlanForm(null))}>儲存計劃</button></>}
         <button className="outline full" onClick={()=>setPlanStep(2)}>上一步</button></>}{settings.plan&&<button className="text-button full" onClick={()=>setPlanForm(null)}>取消</button>}</>}
         <p className="muted tiny">依 Mifflin-St Jeor 公式與每公斤約 7,700 kcal 估算，實際因人而異；體重變化後請更新。僅供參考，有健康狀況請諮詢醫師或營養師。</p></section>
+      <section className="card nutrient-goals"><h2>每日營養目標</h2>{NUTRIENT_GOALS.map(({total:k,label,unit,type,basis,source,note})=>{const g=goals[k];const editing=goalEdit?.key===k;
+        return <div className="goal-row" key={k}><div><b>{label}</b><span className="source">{GOAL_TYPE[type]}</span><strong>{goalText(type,g)}<small> {unit}</small></strong></div>
+          <p className="muted tiny">{basis}（{source}）{g.overridden&&<><br/>已覆寫；建議值 {goalText(type,g.suggested)} {unit}</>}</p>
+          {note&&<p className="muted tiny">{note}</p>}
+          {editing?<><div className="two-columns">{(type==='range'?['min','max']:[type]).map(f=><label key={f}>{type==='range'?(f==='min'?'下限':'上限'):GOAL_TYPE[type]} {unit}<input type="text" inputMode="decimal" value={goalEdit[f]} onChange={e=>setGoalEdit({...goalEdit,[f]:e.target.value})}/></label>)}</div>
+            <div className="button-row"><button className="primary" onClick={saveNutrientGoal}>儲存</button><button className="outline" onClick={()=>setGoalEdit(null)}>取消</button></div></>
+          :<div className="button-row"><button className="outline" onClick={()=>setGoalEdit({key:k,...Object.fromEntries((type==='range'?['min','max']:[type]).map(f=>[f,g[f]??'']))})}>覆寫</button>{g.overridden&&<button className="outline" onClick={()=>changeSetting({nutrientGoals:{[k]:null}},`${label}已恢復建議值`)}>恢復建議值</button>}</div>}</div>;})}
+        {!settings.plan&&<p className="notice">設定減重計劃後，才會依體重計算蛋白質建議值。</p>}
+        <p className="muted tiny">建議值依衛福部國健署「國人膳食營養素參考攝取量」第八版與國民飲食指標，以目前體重與每日熱量目標計算；沒覆寫的項目會跟著自動更新。僅供參考，有健康狀況請諮詢醫師或營養師。</p></section>
       <section className="card"><h2>本機庫找不到時</h2><label className="radio"><input type="radio" name="fallback" checked={settings.fallback==='web'} onChange={()=>changeSetting({fallback:'web'})}/>先查網路，找不到再由 LLM 估算</label><label className="radio"><input type="radio" name="fallback" checked={settings.fallback==='llm'} onChange={()=>changeSetting({fallback:'llm'})}/>直接由 LLM 估算</label><p className="muted tiny">網路資料附來源；估算值會保留標記。記錄時，網路資料與營養標示會自動存入食物庫；LLM 估算不會自動存入。</p></section>
       <section className="card"><h2>外觀</h2>{[['system','跟隨系統'],['light','淺色'],['dark','深色']].map(([value,label])=><label className="radio" key={value}><input type="radio" name="theme" checked={theme===value} onChange={()=>setTheme(value)}/>{label}</label>)}</section>
       <section className="card"><button className="settings-link" onClick={()=>openFoods()}>本機食物資料庫 <span>›</span></button><a className="settings-link" href="/api/export" download>匯出日誌與食物備份 <span>↓</span></a><p className="muted tiny">日誌保存於這台電腦的 SQLite。照片會送至設定的 AI 服務（OpenAI 或 Anthropic）分析，網路搜尋只使用食物名稱及描述。</p></section><p className="version">Meal Journal Local · v2.0.0</p>

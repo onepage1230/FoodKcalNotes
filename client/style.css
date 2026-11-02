@@ -52,3 +52,4 @@ html,body{overflow:hidden;overscroll-behavior:none}.screen{touch-action:none}.sc
 .detail-total+.nutrient-totals{margin:10px 0 0}
 .food-nutrients{margin:4px 0 8px}.food-nutrients>div{position:relative}.food-nutrients b{font-size:12px}.food-nutrients .source{margin:0 auto;font-size:9px;padding:0 5px}
 .summary .nutrient-totals{margin:10px 0 0}
+.goal-row{padding:12px 0;border-top:1px solid var(--bg)}.goal-row:first-of-type{border-top:0;padding-top:0}.goal-row>div:first-child{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.goal-row>div:first-child b{font-size:14px;font-weight:500}.goal-row>div:first-child strong{margin-left:auto;font-size:18px;white-space:nowrap}.goal-row strong small{font-size:12px;font-weight:400}.goal-row p{margin:4px 0}.goal-row .button-row{margin:8px 0 0}.goal-row .button-row button{min-height:38px;padding:8px 14px}
