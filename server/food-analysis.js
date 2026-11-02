@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readSSE } from './sse.js';
 import { safeUrl, validateFood, validPhoto } from './journal.js';
+import { NUTRIENTS, NUTRIENT_KEYS } from '../client/nutrients.js';
 
 export async function collectResponse(body) {
   let output = ''; let response = null;
@@ -28,7 +29,15 @@ export const RECOGNITION_SCHEMA = { name: 'meal_recognition', schema: object({ n
   name: str, aliases: { type: 'array', items: str }, grams: { type: 'number' }, confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
   portionBasis: { type: 'string', enum: ['reference', 'typical'] }, portionNote: str, labelKcalPer100g: nullable('number') }) } }) };
 export const ESTIMATE_SCHEMA = { name: 'food_estimate', schema: object({ kcalPer100g: nullable('number'), sourceUrl: str, sourceTitle: str, notes: str,
-  servingGrams: nullable('number'), sameAs: nullable('string') }) };
+  servingGrams: nullable('number'), sameAs: nullable('string'),
+  ...Object.fromEntries(NUTRIENT_KEYS.map(k => [k, nullable('number')])) }) };
+// LLM 估算的營養素：各自檢查範圍（無效當 null）；三大營養素加總超過 101 就全部當 null，避免保存時 validateFood 拋錯。有值的才列入 estimated。
+export function estimatedNutrients(parsed) {
+  const values = Object.fromEntries(NUTRIENTS.map(({ key, max }) => { const v = parsed?.[key]; return [key, typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= max ? v : null]; }));
+  const macros = ['proteinPer100g', 'fatPer100g', 'carbsPer100g'];
+  if (macros.reduce((sum, k) => sum + (values[k] ?? 0), 0) > 101) for (const k of macros) values[k] = null;
+  return { ...values, estimated: NUTRIENT_KEYS.filter(k => values[k] !== null) };
+}
 // 安全網：拒絕或 max_tokens 仍可能讓格式不完整。
 export function parseJSON(text) {
   const stripped = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
@@ -113,7 +122,7 @@ export async function lookupItem({ item, fallback = 'web', journal, infer, emit,
     emit({ type: 'step', label: '對應本機食物庫', message: `「${item.name}」判斷與「${food.name}」相同，使用本機資料。` });
     return { ...item, ...food, id: item.id, foodId: food.id, grams: item.grams, matched: true, cache: false, recognizedName: item.name, similar: [] };
   };
-  let nutrition = null; let source = 'llm'; let sourceUrl = ''; let sourceTitle = ''; let same = null;
+  let nutrition = null; let source = 'llm'; let nutrients = estimatedNutrients(null); let sourceUrl = ''; let sourceTitle = ''; let same = null;
   if (fallback === 'web') {
     emit({ type: 'step', label: '搜尋營養資料', message: similar.length ? `比對「${item.name}」與本機相近項目，必要時搜尋…` : `正在搜尋「${item.name}」…` });
     try {
@@ -140,18 +149,19 @@ export async function lookupItem({ item, fallback = 'web', journal, infer, emit,
     emit({ type: 'step', label: '估算未收錄食物', message: `「${item.name}」將標記為 LLM 估算，等你確認。` });
     // 搜尋那次已判斷過候選（不論成功與否）就不再重複比對。
     const askCompare = fallback !== 'web' && similar.length;
-    const estimate = await infer({ instructions: `${askCompare ? compareStrict : ''}估計指定食物每100g的熱量，根據一般配方與烹調方式說明不確定性。這不是資料庫測量值，不能聲稱已查網路。${format}${askCompare ? '' : 'sameAs 填 null。'}`,
+    const estimate = await infer({ instructions: `${askCompare ? compareStrict : ''}估計指定食物每100g的熱量，根據一般配方與烹調方式說明不確定性。這不是資料庫測量值，不能聲稱已查網路。${format}另外一併估計每 100 克可食部分的蛋白質、脂肪、碳水化合物、糖（總糖）各以 g 計，鈉以 mg 計（欄位 proteinPer100g、fatPer100g、carbsPer100g、sugarPer100g、sodiumMgPer100g），這些都只是估計值；蛋白質＋脂肪＋碳水化合物不得超過 100；無法估計的欄位填 null。${askCompare ? '' : 'sameAs 填 null。'}`,
       input: [{ role: 'user', content: JSON.stringify({ food: item.name, aliases: item.aliases, context: item.portionNote }) }], schema: ESTIMATE_SCHEMA });
     check(); nutrition = parseJSON(estimate.text);
     if (askCompare && (same = sameAs(nutrition))) return hit(same);
     if (typeof nutrition.kcalPer100g !== 'number') throw new Error(`無法估計「${item.name}」，請提供營養標示或手動新增。`);
-    validateFood({ name: item.name, ...nutrition });
+    nutrients = estimatedNutrients(nutrition);
+    validateFood({ name: item.name, ...nutrition, ...nutrients });
   }
   // 沒有可靠參照物時，改用來源給的一般份量。
   const serving = nutrition.servingGrams;
   if (item.portionBasis === 'typical' && Number.isFinite(serving) && serving >= 1 && serving <= 3000)
     item = { ...item, grams: serving, portionNote: `${source === 'web' ? `依一般份量 ${serving} g（${sourceTitle || sourceUrl}）` : `依一般份量估計 ${serving} g（LLM 估算）`}；${item.portionNote}`.slice(0, 500) };
-  return { ...item, kcalPer100g: nutrition.kcalPer100g, source, sourceUrl, sourceTitle,
+  return { ...item, kcalPer100g: nutrition.kcalPer100g, ...nutrients, source, sourceUrl, sourceTitle,
     notes: typeof nutrition.notes === 'string' ? nutrition.notes.slice(0, 1000) : '', matched: false, cache: true, foodId: '',
     // 判斷為不同的相近項目留給確認畫面，使用者可改成「其實是同一種」。
     similar: similar.map(f => ({ ...f })) };

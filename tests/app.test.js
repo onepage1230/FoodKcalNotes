@@ -214,7 +214,7 @@ test('背景分析自動存成餐點：LLM 估算不寫入共用食物庫，網�
     if (JSON.parse(content).food === '網路麵' && body.tools) return [{ type: 'web_search_call', status: 'completed' }, { type: 'message', content: [{ type: 'output_text',
       text: JSON.stringify({ kcalPer100g: 150, sourceUrl: 'https://example.com/noodle', sourceTitle: '例', notes: '' }),
       annotations: [{ type: 'url_citation', url: 'https://example.com/noodle', title: '例' }] }] }];
-    return JSON.stringify({ kcalPer100g: 40, sourceUrl: '', sourceTitle: '', notes: '估' });
+    return JSON.stringify({ kcalPer100g: 40, sourceUrl: '', sourceTitle: '', notes: '估', proteinPer100g: 1, fatPer100g: 1, carbsPer100g: 5, sugarPer100g: 1, sodiumMgPer100g: 200 });
   };
   const job = await f.analyze({ model: 'gpt-5.6-terra', text: '麵和湯', fallback: 'web' }, friend);
   assert.equal(job.status, 'done');
@@ -222,6 +222,8 @@ test('背景分析自動存成餐點：LLM 估算不寫入共用食物庫，網�
   assert.deepEqual([meal.day, meal.time], localAt(job.createdAt));
   assert.deepEqual(meal.items.map(i => [i.name, i.source]), [['網路麵', 'web'], ['估算湯', 'llm']]);
   assert.equal((await f.request('/api/meals/' + job.mealId)).status, 404);
+  // 估算湯帶五項估算營養素並標「估」，但 LLM 估算仍不寫入共用食物庫。
+  assert.equal(meal.items[1].sodiumMgPer100g, 200); assert.equal(meal.items[1].estimated.length, 5); assert.deepEqual(meal.items[0].estimated, []);
   assert.deepEqual(f.journal.foods().map(food => food.name), ['網路麵']);
   // 手動確認（POST /api/meals）維持原行為：LLM 估算也寫入。
   await f.request('/api/meals', { ...job.result, day: '2026-10-02', time: '12:00', photo: '' }, friend);
@@ -294,6 +296,9 @@ test('ChatGPT：辨識與估算帶 strict text.format（json_schema）；搜尋�
   assert.equal(search.text, undefined); assert.deepEqual(search.tools, [{ type: 'web_search' }]);
   assert.deepEqual(estimate.text, { format: { type: 'json_schema', name: 'food_estimate', strict: true, schema: ESTIMATE_SCHEMA.schema } });
   assert.ok(f.calls.responses.every(b => !('schema' in b)));
+  // 估算 schema 含五項可空的營養素欄位（ticket 03）；搜尋那次不帶。
+  for (const k of ['proteinPer100g', 'fatPer100g', 'carbsPer100g', 'sugarPer100g', 'sodiumMgPer100g']) assert.deepEqual(estimate.text.format.schema.properties[k], { anyOf: [{ type: 'number' }, { type: 'null' }] }, k);
+  assert.doesNotMatch(search.instructions, /sodiumMgPer100g/); assert.match(estimate.instructions, /sodiumMgPer100g/);
 });
 test('背景重新查詢：只查這一項並改寫已存餐點，保留重量與其他項', async t => {
   const f = await fixture(t, { chatgptShared: true }); f.journal.putFood({name:'滷排骨',kcalPer100g:220,source:'manual'});
