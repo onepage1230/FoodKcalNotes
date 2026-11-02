@@ -1,4 +1,5 @@
-import { analyzeMeal, lookupItem } from './food-analysis.js';
+import { analyzeMeal, lookupItem, backfillNutrients } from './food-analysis.js';
+import { NUTRIENT_KEYS } from '../client/nutrients.js';
 import { validPhoto, validDate } from './journal.js';
 
 // 單次模型呼叫逾時（預設 150 秒）就重試一次；再逾時丟出 error.timeout。其他錯誤（額度、授權）不重試。
@@ -100,7 +101,7 @@ export function attachFoodRoutes(app, { requireProvider, providerChain, running,
     res.json({ id });
   });
   // 已存餐點的單項「重新查詢」：只用新名稱查這一項的熱量，不拆項、不改份量；完成後直接改寫該餐點。
-  const RELOOKUP_FIELDS = ['name', 'kcalPer100g', 'source', 'sourceUrl', 'sourceTitle', 'notes', 'matched', 'foodId', 'recognizedName', 'similar', 'aliases', 'confidence'];
+  const RELOOKUP_FIELDS = ['name', 'kcalPer100g', 'source', 'sourceUrl', 'sourceTitle', 'notes', 'matched', 'foodId', 'recognizedName', 'similar', 'aliases', 'confidence', ...NUTRIENT_KEYS, 'estimated'];
   app.post('/api/jobs/relookup', async (req, res) => {
     requireProvider(req); const journal = req.journal;
     const { mealId, itemId, name, model, fallback = journal.preferences().fallback } = req.body;
@@ -113,13 +114,16 @@ export function attachFoodRoutes(app, { requireProvider, providerChain, running,
     const id = journal.createJob({ text: name.trim(), kind: 'relookup', mealId });
     runJob(journal, id, run, async () => {
       const warnings = [];
-      const [result] = run.tag([await lookupItem({ item: { id: itemId, name: name.trim(), aliases: [], grams: old.grams, confidence: 'high', portionNote: '', portionBasis: 'reference' },
-        fallback, journal, infer: run.infer, emit() {}, signal: run.signal, warnings })]);
+      const looked = await lookupItem({ item: { id: itemId, name: name.trim(), aliases: [], grams: old.grams, confidence: 'high', portionNote: '', portionBasis: 'reference' },
+        fallback, journal, infer: run.infer, emit() {}, signal: run.signal, warnings });
+      await backfillNutrients({ items: [looked], infer: run.infer, emit() {}, signal: run.signal, warnings }); // 與整餐分析同一套補估，失敗只加警告
+      const [result] = run.tag([looked]);
       // 查詢期間餐點可能被編輯過：以最新內容為準，只取代這一項。
       const meal = journal.meal(mealId); const current = meal?.items.find(i => i.id === itemId);
       if (!current) throw new Error('品項已被刪除。');
       const item = { ...current, ...Object.fromEntries(RELOOKUP_FIELDS.filter(k => k in result).map(k => [k, result[k]])),
-        id: current.id, grams: current.grams, portionNote: current.portionNote, cache: result.source === 'llm' ? false : result.cache };
+        id: current.id, grams: current.grams, portionNote: current.portionNote, nutrientsEdited: false, // 新名稱的資料不是使用者手改的
+         cache: result.source === 'llm' ? false : result.cache };
       journal.saveMeal({ ...meal, items: meal.items.map(i => i.id === itemId ? item : i) }, { shareFoods: shareFoods(req) });
       return { result: { item, warnings, servedBy: run.servedBy() }, mealId };
     });

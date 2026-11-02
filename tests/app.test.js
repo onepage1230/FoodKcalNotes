@@ -347,7 +347,7 @@ test('背景重新查詢：只查這一項並改寫已存餐點，保留重量�
   assert.equal((await post({}, friend)).status, 404); assert.equal((await post({ name: '' })).status, 400);
   assert.equal((await post({ model: 'gpt-6-astra' })).status, 400);
   const hit = await relookup({ name: '滷排骨' });
-  assert.equal(f.calls.responses.length, 0);
+  assert.equal(f.calls.responses.length, 1); // 本機命中只剩補估營養素那一次呼叫（預設回覆沒有可用內容）
   assert.deepEqual([hit.status, hit.kind, hit.text, hit.mealId, hit.result.item.id], ['done', 'relookup', '滷排骨', meal.id, 'x1']);
   let saved = await (await f.request('/api/meals/' + meal.id)).json();
   assert.deepEqual([saved.name, saved.day, saved.time], ['午餐', '2026-10-02', '12:00']);
@@ -355,7 +355,7 @@ test('背景重新查詢：只查這一項並改寫已存餐點，保留重量�
     [['x1', '滷排骨', 150, 220, 'manual', true, '一塊'], ['x2', '白飯', 200, 130, 'manual', false, '']]);
   f.calls.reply = JSON.stringify({kcalPer100g:180,sourceUrl:'',sourceTitle:'',notes:'測試估算',servingGrams:300});
   const est = await relookup({ name: '未知排骨' });
-  assert.equal(f.calls.responses.length, 1); assert.equal(est.status, 'done');
+  assert.equal(f.calls.responses.length, 2); assert.equal(est.status, 'done');
   saved = await (await f.request('/api/meals/' + meal.id)).json();
   assert.deepEqual(saved.items.map(i => [i.name, i.grams, i.kcalPer100g, i.source, i.cache]), [['未知排骨', 150, 180, 'llm', false], ['白飯', 200, 130, 'manual', false]]);
   assert.deepEqual(f.journal.foods().map(food => food.name).sort(), ['滷排骨']);
@@ -366,6 +366,61 @@ test('背景重新查詢：只查這一項並改寫已存餐點，保留重量�
   const gone = await relookup({ name: '另一種排骨' });
   assert.deepEqual([gone.status, gone.error], ['error', '品項已被刪除。']);
   assert.deepEqual((await (await f.request('/api/meals/' + meal.id)).json()).items.map(i => i.id), ['x2']);
+});
+// ticket 07：重新查詢與單項 AI 估算帶上營養素
+const FILL = { proteinPer100g: 2.5, fatPer100g: 0.3, carbsPer100g: 28, sugarPer100g: 0, sodiumMgPer100g: 1 };
+const NKEYS = Object.keys(FILL);
+const isFillBody = body => JSON.stringify(body).includes('nutrient_fill');
+const fillOf = (body, patch) => JSON.stringify({ items: JSON.parse(body.input[0].content).items.map(i => ({ id: i.id, ...Object.fromEntries(NKEYS.map(k => [k, null])), ...patch })) });
+test('重新查詢：營養素依新來源更新、缺值補估、estimated 正確，nutrientsEdited 重設，其他項與克數不變', async t => {
+  const f = await fixture(t);
+  f.journal.putFood({ name: '完整飯', kcalPer100g: 130, source: 'manual', ...FILL });
+  f.journal.putFood({ name: '缺值麵', kcalPer100g: 140, source: 'manual', proteinPer100g: 4 });
+  const old = { proteinPer100g: 99, fatPer100g: 1, carbsPer100g: 1, sugarPer100g: 1, sodiumMgPer100g: 999, estimated: [], nutrientsEdited: true };
+  const meal = await (await f.request('/api/meals', { name: '午餐', day: '2026-10-02', time: '12:00', photo: '', items: [
+    { id: 'x1', name: '舊名', grams: 150, kcalPer100g: 300, source: 'manual', ...old },
+    { id: 'x2', name: '白飯', grams: 200, kcalPer100g: 130, source: 'manual', proteinPer100g: 2, estimated: ['proteinPer100g'] }] })).json();
+  const relookup = body => f.analyze({ model: 'gpt-5.6-terra', fallback: 'llm', mealId: meal.id, itemId: 'x1', ...body }, undefined, '/api/jobs/relookup');
+  const read = async () => (await (await f.request('/api/meals/' + meal.id)).json()).items;
+  // 本機庫命中且營養素完整：不補估，estimated 清空，手改旗標重設。
+  let job = await relookup({ name: '完整飯' }); assert.equal(job.status, 'done'); assert.equal(f.calls.responses.length, 0);
+  let [a, b] = await read();
+  assert.deepEqual([a.name, a.grams, a.kcalPer100g, ...NKEYS.map(k => a[k]), a.estimated, a.nutrientsEdited], ['完整飯', 150, 130, ...Object.values(FILL), [], false]);
+  assert.deepEqual([b.grams, b.proteinPer100g, b.estimated], [200, 2, ['proteinPer100g']]);
+  // 本機庫命中但缺值：補估一次，只補 null 欄位。
+  f.calls.reply = body => fillOf(body, FILL);
+  job = await relookup({ name: '缺值麵' }); assert.equal(f.calls.responses.length, 1); assert.deepEqual(job.result.warnings, []);
+  [a, b] = await read();
+  assert.deepEqual([a.name, a.grams, a.kcalPer100g, a.proteinPer100g, a.fatPer100g, a.nutrientsEdited], ['缺值麵', 150, 140, 4, 0.3, false]);
+  assert.deepEqual(a.estimated, NKEYS.filter(k => k !== 'proteinPer100g')); assert.equal(b.name, '白飯');
+  // LLM 估算：營養素全為估算值，且不被補估呼叫覆蓋。
+  f.calls.responses.length = 0;
+  f.calls.reply = JSON.stringify({ kcalPer100g: 180, sourceUrl: '', sourceTitle: '', notes: '估', servingGrams: null, sameAs: null, ...FILL, sodiumMgPer100g: null });
+  job = await relookup({ name: '未知排骨' }); assert.equal(f.calls.responses.length, 1);
+  [a] = await read(); assert.deepEqual([a.source, a.sodiumMgPer100g, a.proteinPer100g, a.estimated], ['llm', null, 2.5, NKEYS.filter(k => k !== 'sodiumMgPer100g')]);
+  assert.equal(a.nutrientsEdited, false);
+});
+test('重新查詢：補估失敗只加警告，熱量與已存的新名稱照常寫入', async t => {
+  const f = await fixture(t); f.journal.putFood({ name: '缺值麵', kcalPer100g: 140, source: 'manual' });
+  const meal = await (await f.request('/api/meals', { name: '午餐', day: '2026-10-02', time: '12:00', photo: '', items: [{ id: 'x1', name: '舊名', grams: 150, kcalPer100g: 300, source: 'manual', proteinPer100g: 9, nutrientsEdited: true }] })).json();
+  f.calls.reply = '不是 JSON';
+  const job = await f.analyze({ model: 'gpt-5.6-terra', fallback: 'llm', mealId: meal.id, itemId: 'x1', name: '缺值麵' }, undefined, '/api/jobs/relookup');
+  assert.equal(job.status, 'done'); assert.equal(job.result.warnings.length, 1);
+  const [a] = (await (await f.request('/api/meals/' + meal.id)).json()).items;
+  assert.deepEqual([a.name, a.grams, a.kcalPer100g, a.proteinPer100g, a.estimated, a.nutrientsEdited], ['缺值麵', 150, 140, null, [], false]);
+});
+test('單項 AI 估算：回傳項目含營養素與 estimated（含補估），保存後寫入食物庫', async t => {
+  const f = await fixture(t); f.journal.putFood({ name: '測試飯', kcalPer100g: 130, source: 'manual' });
+  f.calls.reply = body => isFillBody(body) ? fillOf(body, FILL)
+    : JSON.stringify(Array.isArray(body.input[0].content) || body.input[0].content.includes('套餐') ? { name: '套餐', items: [{ name: '測試飯', grams: 300 }, { name: '蘋果派', grams: 80 }] }
+      : { kcalPer100g: 250, sourceUrl: '', sourceTitle: '', notes: '估', servingGrams: null, sameAs: null, ...FILL, fatPer100g: 11 });
+  const r = await (await f.request('/api/estimate', { model: 'gpt-5.6-terra', fallback: 'llm', name: '測試飯套餐' })).json();
+  const [rice, pie] = r.items;
+  assert.deepEqual(NKEYS.map(k => rice[k]), Object.values(FILL)); assert.deepEqual(rice.estimated, NKEYS); // 補估
+  assert.equal(pie.fatPer100g, 11); assert.deepEqual(pie.estimated, NKEYS); assert.equal(pie.cache, true);
+  const saved = await (await f.request('/api/meals', { name: '套餐', day: '2026-10-02', time: '12:00', photo: '', items: r.items })).json();
+  assert.equal(saved.items[1].fatPer100g, 11);
+  const food = f.journal.foods('蘋果派')[0]; assert.deepEqual([food.fatPer100g, food.estimated], [11, NKEYS]);
 });
 test('真實 JWT 簽章驗證，拒絕錯誤 nonce、audience、issuer 與逾期', async () => {
   const { privateKey, publicKey } = await generateKeyPair('RS256');

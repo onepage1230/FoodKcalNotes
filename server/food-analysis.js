@@ -53,7 +53,7 @@ export const NUTRIENT_FILL_SCHEMA = { name: 'nutrient_fill', schema: object({ it
   ...Object.fromEntries(NUTRIENT_KEYS.map(k => [k, nullable('number')])) }) } }) };
 // 熱量已有來源（標示、食物庫、網路）但營養素缺值的項目，整餐合併一次補估；只補 null 欄位並列入 estimated，熱量絕不改動。
 // 失敗不讓整餐失敗（營養素保留 null、加警告）；使用者中止照常拋出。
-async function backfillNutrients({ items, infer, emit, signal, warnings }) {
+export async function backfillNutrients({ items, infer, emit, signal, warnings }) {
   const need = items.filter(i => (i.source !== 'llm' || i.matched) && NUTRIENT_KEYS.some(k => i[k] === null || i[k] === undefined));
   if (!need.length) return;
   emit({ type: 'step', label: '補估營養素', message: `${need.length} 項已有熱量來源但缺營養素，合併估計…` });
