@@ -17,7 +17,7 @@ const fmtAmount = (n, unit) => unit === 'mg' || n >= 10 ? fmt(n) : n.toFixed(1);
 const NutrientTotals = ({ totals, count, goals }) => <div className="nutrient-totals">{NUTRIENTS.map(({ total: k, label, unit }) => { const t = totals[k]; const g = goals?.[k];
   const status = g && t.unknown < count ? goalStatus(t, g) : 'unknown';
   return <div key={k}><small>{label}</small><b>{t.unknown >= count ? '—' : <>{t.unknown ? '至少 ' : ''}{fmtAmount(t.known, unit)}<small> {unit}</small></>}</b>{t.unknown > 0 && t.unknown < count && <small className="muted">{t.unknown} 項未知</small>}
-    {g && <small className="muted goal-progress">目標 {goalText(g.type, g)}</small>}{GOAL_STATUS_TEXT[status] && <small className={'goal-status '+status}>{GOAL_STATUS_TEXT[status]}</small>}</div>; })}</div>;
+    {g && (g.min ?? g.max) != null && <small className="muted goal-progress">目標 {goalText(g.type, g)}</small>}{GOAL_STATUS_TEXT[status] && <small className={'goal-status '+status}>{GOAL_STATUS_TEXT[status]}</small>}</div>; })}</div>;
 // 食物庫每 100g 營養素：未知顯示「—」，估算的欄位標「估」。
 const shortLabel = label => label.replace('化合物', '').replace('（總糖）', '');
 const FoodNutrients = ({ food }) => <div className="nutrient-totals food-nutrients">{NUTRIENTS.map(({ key, label, unit }) => { const v = nutrientValue(food[key]);
