@@ -76,7 +76,9 @@ export function validateItems(items) {
       throw bad('食物重量需要介於 0～5000g 之間。');
     return { ...food, id: text(item.id, 100) || randomUUID(), grams: item.grams,
       foodId: text(item.foodId, 100), matched: !!item.matched, confidence: text(item.confidence, 30),
-      portionNote: text(item.portionNote, 500), cache: !!item.cache, recognizedName: text(item.recognizedName, 100) };
+      portionNote: text(item.portionNote, 500), cache: !!item.cache, recognizedName: text(item.recognizedName, 100),
+      // nutrientsEdited：使用者手動改過營養素；只存在餐點項目，不寫入食物庫，也不參與補值。
+      nutrientsEdited: !!item.nutrientsEdited };
   });
 }
 function validPlan(p) {
@@ -96,6 +98,22 @@ export function validPhoto(photo) {
 }
 
 const AUTOMATED = ['web', 'llm', 'label'];
+// ADR 0010 的快取例外：只改營養素欄位。null 可被任何值補上（估算值帶 estimated）；
+// 估算欄位只能被有出處（web／label、非命中、不在項目 estimated）的值覆蓋並移出 estimated；有出處的欄位不動。
+export function mergeNutrients(food, item) {
+  const estimated = new Set(food.estimated || []); const itemEstimated = new Set(item.estimated || []);
+  const sourced = !item.matched && ['web', 'label'].includes(item.source);
+  let changed = false;
+  for (const key of NUTRIENT_KEYS) {
+    const value = item[key] ?? null;
+    if (value === null) continue;
+    const guess = itemEstimated.has(key);
+    if ((food[key] ?? null) === null) { food[key] = value; if (guess) estimated.add(key); changed = true; }
+    else if (estimated.has(key) && sourced && !guess) { food[key] = value; estimated.delete(key); changed = true; }
+  }
+  food.estimated = NUTRIENT_KEYS.filter(k => estimated.has(k));
+  return changed;
+}
 
 // shared：主日誌。朋友日誌的食物相關方法都改用主日誌的共用食物庫；餐點、設定與 meta 各自保存。
 export function createJournal(filename, { foods: shared = null } = {}) {
@@ -149,6 +167,15 @@ export function createJournal(filename, { foods: shared = null } = {}) {
     food.aliases = [...food.aliases, ...added.map(n => n.trim().slice(0, 100))].slice(0, 20);
     db.prepare('UPDATE foods SET data=? WHERE id=?').run(JSON.stringify(food), id);
   }
+  // 保存餐點時補上或覆蓋既有食物的營養素（規則見 mergeNutrients）；熱量、名稱、來源與別名不動。
+  function fillNutrients(id, item) {
+    const row = db.prepare('SELECT data FROM foods WHERE id=?').get(id);
+    if (!row) return;
+    const food = JSON.parse(row.data);
+    if (!mergeNutrients(food, item)) return;
+    // 合併後不合格（例如三大營養素加總超過 100 g）就不補，不讓整餐保存失敗。
+    try { db.prepare('UPDATE foods SET data=? WHERE id=?').run(JSON.stringify(validateFood(food)), id); } catch { /* 保留原資料 */ }
+  }
   // 食物庫在 app 內不能手動修改；只有保存餐點時自動快取，以及維護者用腳本整理。
   function putFood(input, overwrite = true) {
     const food = validateFood(input);
@@ -159,7 +186,7 @@ export function createJournal(filename, { foods: shared = null } = {}) {
       .run(id, food.name, normalize(food.name), JSON.stringify(food));
     return id;
   }
-  const local = { foods, findFood, candidates, addAliases, putFood };
+  const local = { foods, findFood, candidates, addAliases, putFood, fillNutrients };
   const library = shared ? Object.fromEntries(Object.keys(local).map(key => [key, shared[key]])) : local;
   // 一次性搬移：朋友日誌原有的自動查詢食物（web/llm/label）複製到共用庫，同名不覆蓋；原表保留不動。
   if (shared && !getMeta('foodsMigrated')) {
@@ -208,6 +235,11 @@ export function createJournal(filename, { foods: shared = null } = {}) {
       // shareFoods=false（未開 FRIENDS_CACHE 的朋友）：完全不寫共用食物庫。
       if (shareFoods) for (const item of items) if (item.cache && !item.matched && AUTOMATED.includes(item.source)) item.foodId = library.putFood(item, false);
       if (shareFoods) for (const item of items) if (item.matched && item.foodId && item.recognizedName) library.addAliases(item.foodId, [item.recognizedName]);
+      // 營養素補值（ADR 0010）：命中項目，或剛寫入／已存在的自動來源項目；改過營養素的項目不參與。
+      // 改過名稱或熱量會變成 manual、非命中（不屬自動來源），背景存檔的 LLM 估算 cache=false，都不會進來。
+      // 命中項目的 source 是食物庫的來源（可能是維護者匯入的 manual），不代表使用者改過。
+      if (shareFoods) for (const item of items) if (item.foodId && (item.matched || (item.cache && AUTOMATED.includes(item.source))) && !item.nutrientsEdited)
+        library.fillNutrients(item.foodId, item);
       db.prepare('INSERT INTO meals VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET day=excluded.day,time=excluded.time,name=excluded.name,items=excluded.items,photo=excluded.photo')
         .run(id, input.day, input.time, name, JSON.stringify(items), photo, new Date().toISOString());
       db.exec('COMMIT');

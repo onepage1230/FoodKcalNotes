@@ -58,6 +58,8 @@
 | 任何自動來源 | 同名（正規化後）已在庫裡 | 不覆蓋 | `putFood(item, false)` |
 | 判斷為同一種 | 模型 `sameAs` 命中，或使用者按「其實是同一種」 | 只加別名 | `saveMeal()` 呼叫 `addAliases()` |
 
+> 營養素例外：既有食物的 `null` 或估算營養素可在保存時被補上／覆蓋（熱量與其他欄位仍不覆蓋），見 [0010](0010-nutrients.md) 的「快取例外」；實作為 `saveMeal()` 呼叫 `fillNutrients()`。
+
 - **別名**：項目為 `matched` 且帶有 `recognizedName` 時，`saveMeal()` 呼叫 `addAliases()`，把辨識名稱加為別名（每筆最多 20 個）。來源有兩種：模型在 `lookupItem()` 判斷 `sameAs`，或使用者在結果頁按「其實是同一種」（`useSame()`）。使用者按「不是這個」（`notSame()`）會清掉這個對應。
 - **快照**：`meals.items` 存整份 JSON（含 `kcalPer100g`），一餐熱量讀取時由快照計算，食物庫之後改動不會回頭改歷史。
 - **app 內不能修改食物庫**：`putFood()` 只在保存餐點時呼叫；修正與匯入由維護者用腳本處理（`npm run import-foods`）。

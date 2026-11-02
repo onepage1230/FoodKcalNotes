@@ -250,6 +250,38 @@ test('FRIENDS_CACHE 預設關閉：朋友的分析與手動保存都不寫共用
   const own = await f.analyze({ model: 'gpt-5.6-terra', text: '麵', fallback: 'web' });
   assert.equal(own.status, 'done'); assert.ok(f.journal.findFood(['網路麵']));
 });
+test('背景分析自動存檔後，餐點與食物庫的營養素與估算標記正確（新食物、補 null、標示覆蓋估算）', async t => {
+  const f = await fixture(t);
+  const N = { proteinPer100g: null, fatPer100g: null, carbsPer100g: null, sugarPer100g: null, sodiumMgPer100g: null };
+  const id = f.journal.putFood({ name: '標示餅', kcalPer100g: 400, source: 'web', ...N, proteinPer100g: 6, fatPer100g: 30, estimated: ['fatPer100g'] });
+  const label = { labelKcalPer100g: 999, labelProteinPer100g: 9, labelFatPer100g: 20, labelCarbsPer100g: 55, labelSugarPer100g: null, labelSodiumMgPer100g: 250 };
+  f.calls.reply = body => Array.isArray(body.input[0].content) ? JSON.stringify({ name: '下午茶', note: '', items: [
+    { name: '標示餅', aliases: [], grams: 50, confidence: 'high', portionBasis: 'reference', portionNote: '', ...label },
+    { name: '新標示茶', aliases: [], grams: 300, confidence: 'high', portionBasis: 'reference', portionNote: '', labelKcalPer100g: 30, labelSugarPer100g: 7 }] })
+    : JSON.stringify({ kcalPer100g: 50, sourceUrl: '', sourceTitle: '', notes: '' });
+  const job = await f.analyze({ model: 'gpt-5.6-terra', text: '餅和茶', fallback: 'llm' });
+  assert.equal(job.status, 'done');
+  const meal = await (await f.request('/api/meals/' + job.mealId)).json();
+  assert.deepEqual(meal.items.map(i => [i.name, i.source, i.kcalPer100g, i.fatPer100g, i.estimated]), [['標示餅', 'label', 999, 20, []], ['新標示茶', 'label', 30, null, []]]);
+  const cake = f.journal.foods().find(food => food.id === id); const tea = f.journal.findFood(['新標示茶']);
+  // 熱量與有出處的蛋白質不變；估算的脂肪被標示覆蓋並移出 estimated；null 的碳水與鈉補上。
+  assert.deepEqual([cake.kcalPer100g, cake.proteinPer100g, cake.fatPer100g, cake.carbsPer100g, cake.sugarPer100g, cake.sodiumMgPer100g, cake.estimated], [400, 6, 20, 55, null, 250, []]);
+  assert.deepEqual([tea.kcalPer100g, tea.sugarPer100g, tea.proteinPer100g, tea.estimated], [30, 7, null, []]);
+});
+test('FRIENDS_CACHE 關閉：朋友的背景分析不新增食物，也不補既有食物的營養素', async t => {
+  const f = await fixture(t, { chatgptShared: true });
+  const friend = { Host: 'pc.example.ts.net', Origin: 'https://pc.example.ts.net', 'Tailscale-User-Login': 'friend@example.com' };
+  const id = f.journal.putFood({ name: '標示餅', kcalPer100g: 400, source: 'web', fatPer100g: 30, estimated: ['fatPer100g'] });
+  f.calls.reply = () => JSON.stringify({ name: '下午茶', note: '', items: [
+    { name: '標示餅', aliases: [], grams: 50, confidence: 'high', portionBasis: 'reference', portionNote: '', labelKcalPer100g: 999, labelFatPer100g: 20, labelSodiumMgPer100g: 250 },
+    { name: '新標示茶', aliases: [], grams: 300, confidence: 'high', portionBasis: 'reference', portionNote: '', labelKcalPer100g: 30, labelSugarPer100g: 7 }] });
+  const job = await f.analyze({ model: 'gpt-5.6-terra', text: '餅和茶', fallback: 'llm' }, friend);
+  assert.equal(job.status, 'done');
+  assert.equal((await (await f.request('/api/meals/' + job.mealId, null, friend)).json()).items[0].fatPer100g, 20);
+  const cake = f.journal.foods().find(food => food.id === id);
+  assert.deepEqual(f.journal.foods().map(food => food.name), ['標示餅']);
+  assert.deepEqual([cake.fatPer100g, cake.sodiumMgPer100g, cake.estimated], [30, null, ['fatPer100g']]);
+});
 test('自動保存失敗時工作記為 error 並保留結果', async t => {
   const f = await fixture(t); f.journal.putFood({ name: '測試飯', kcalPer100g: 130, source: 'manual' });
   f.journal.saveMeal = () => { throw new Error('每餐需要 1～30 項食物。'); };

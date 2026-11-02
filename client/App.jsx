@@ -10,6 +10,10 @@ const fmtAmount = (n, unit) => unit === 'mg' || n >= 10 ? fmt(n) : n.toFixed(1);
 // 營養素總計：未知不當 0；有未知時顯示「至少 X」與未知項數，全部未知顯示「—」。
 const NutrientTotals = ({ totals, count }) => <div className="nutrient-totals">{NUTRIENTS.map(({ total: k, label, unit }) => { const t = totals[k];
   return <div key={k}><small>{label}</small><b>{t.unknown >= count ? '—' : <>{t.unknown ? '至少 ' : ''}{fmtAmount(t.known, unit)}<small> {unit}</small></>}</b>{t.unknown > 0 && t.unknown < count && <small className="muted">{t.unknown} 項未知</small>}</div>; })}</div>;
+// 食物庫每 100g 營養素：未知顯示「—」，估算的欄位標「估」。
+const shortLabel = label => label.replace('化合物', '').replace('（總糖）', '');
+const FoodNutrients = ({ food }) => <div className="nutrient-totals food-nutrients">{NUTRIENTS.map(({ key, label, unit }) => { const v = nutrientValue(food[key]);
+  return <div key={key}><small>{shortLabel(label)}</small><b>{v === null ? '—' : <>{fmtAmount(v, unit)}<small> {unit}</small></>}</b>{v !== null && food.estimated?.includes(key) && <span className="source llm">估</span>}</div>; })}</div>;
 const today = (d = new Date()) => { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const nowTime = () => new Date().toTimeString().slice(0,5);
 const sourceLabel = i => `${i.matched ? '本機庫 · ' : ''}${({manual:'手動資料',web:'網路資料',llm:'LLM 估算',label:'營養標示'})[i.source] || '待確認'}`;
@@ -162,7 +166,7 @@ export default function App() {
   function notSame(index){const i=draft.items[index];const food={id:i.foodId,name:i.name,aliases:i.aliases,kcalPer100g:i.kcalPer100g,source:i.source,sourceUrl:i.sourceUrl,sourceTitle:i.sourceTitle,notes:i.notes};
     editItem(index,{...Object.fromEntries(NUTRIENTS.map(n=>[n.key,null])),estimated:[],name:i.recognizedName,aliases:[],kcalPer100g:0,source:'manual',sourceUrl:'',sourceTitle:'',notes:'',matched:false,foodId:'',recognizedName:'',cache:false,similar:[food]});
     notify('請填入這項的每100g熱量，或從食物庫選擇。');}
-  function useSame(index,f){const i=draft.items[index];editItem(index,{...f,id:i.id,foodId:f.id,grams:i.grams,matched:true,cache:false,recognizedName:i.recognizedName||i.name,similar:[]});}
+  function useSame(index,f){const i=draft.items[index];editItem(index,{...f,id:i.id,foodId:f.id,grams:i.grams,matched:true,cache:false,nutrientsEdited:false,recognizedName:i.recognizedName||i.name,similar:[]});}
   // 單項「AI 估算」：名稱當成文字描述跑完整分析，拆成的多項（各自估份量）取代這一項。
   // 伺服器回報有可用的 AI 服務即可；舊版伺服器沒有 providersReady 時沿用 ChatGPT 登入＋模型檢查。
   function needModel(){if(status?.providersReady??(active?.signedIn&&active.planEnabled&&settings.model))return false;setError(status?.providersError||'尚無可用的 AI 服務：請先登入 ChatGPT 並選擇模型，或設定 Claude API key；也可以回首頁手動記錄。');return true;}
@@ -185,7 +189,7 @@ export default function App() {
   function addManual(){setDraft(d=>({...d,items:[...d.items,{id:crypto.randomUUID(),name:'',grams:100,kcalPer100g:0,source:'manual',aliases:[],notes:'',sourceUrl:'',sourceTitle:'',cache:false,matched:false}]}));}
   const saveDraft=d=>api('/api/meals',{...d,items:d.items.map(i=>({...i,grams:Number(i.grams),kcalPer100g:Number(i.kcalPer100g),...Object.fromEntries(NUTRIENTS.map(n=>[n.key,nutrientValue(i[n.key])]))}))});
   // 手動改營養素：該欄位不再是估算值；整項不寫入食物庫（同改熱量），熱量來源標籤保留。
-  function editNutrient(index,key,value){editItem(index,{[key]:value,estimated:(draft.items[index].estimated||[]).filter(k=>k!==key),cache:false});}
+  function editNutrient(index,key,value){editItem(index,{[key]:value,estimated:(draft.items[index].estimated||[]).filter(k=>k!==key),cache:false,nutrientsEdited:true});}
   async function save(){if(saving)return;const zero=draft.items.filter(i=>!Number(i.kcalPer100g)).length;if(zero&&!window.confirm(`有 ${zero} 項熱量是 0，確定要存嗎？`))return;setSaving(true);setError('');try{
     const result=await saveDraft(draft);setDay(result.day);await loadJournal(result.day);setDraft(null);setText('');setPhoto('');setScreen('home');notify(`已記下「${result.name}」 +${fmt(result.kcal)} kcal`);
   }catch(e){setError(e.message);}finally{setSaving(false);}}
@@ -298,7 +302,7 @@ export default function App() {
     {screen==='foods'&&<div className="screen">{back('本機食物庫',()=>setScreen(picking?'result':'settings'))}<div className="scroll page-pad"><input className="search" aria-label="搜尋食物" placeholder="搜尋食物名稱或別名" value={query} onChange={e=>setQuery(e.target.value)}/>
       {foods.length>0&&<div className="chips">{[['全部',foods.length],...groups].map(([g,n])=><button key={g} className={'outline'+(group===g?' on':'')} aria-pressed={group===g} onClick={()=>setGroup(g)}>{g} {n}</button>)}</div>}
       {!foods.length&&<p className="notice">食物庫目前是空的。存餐點時，網路查到的資料與營養標示會自動加入。</p>}
-      {filteredFoods.map(f=><div className="card food-library" key={f.id}><div><b>{f.name}</b>{source(f)}</div><p><strong>{f.kcalPer100g}</strong> kcal / 100g</p>{sourceDetails(f)}{picking&&<div className="button-row"><button className="primary" onClick={()=>pickFood(f)}>加入這餐</button></div>}</div>)}
+      {filteredFoods.map(f=><div className="card food-library" key={f.id}><div><b>{f.name}</b>{source(f)}</div><p><strong>{f.kcalPer100g}</strong> kcal / 100g</p><FoodNutrients food={f}/>{sourceDetails(f)}{picking&&<div className="button-row"><button className="primary" onClick={()=>pickFood(f)}>加入這餐</button></div>}</div>)}
     </div></div>}
     {toast&&<div className="toast" role="status">{toast}</div>}
   </div>;
