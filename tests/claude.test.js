@@ -118,7 +118,7 @@ function assertStrict(node, at = 'root') {
 test('結構化輸出 schema 符合 strict 規則', () => {
   for (const { name, schema } of [RECOGNITION_SCHEMA, ESTIMATE_SCHEMA]) { assert.match(name, /^[a-z_]+$/); assert.equal(schema.type, 'object'); assertStrict(schema, name); }
   assert.deepEqual(Object.keys(RECOGNITION_SCHEMA.schema.properties.items.items.properties),
-    ['name', 'aliases', 'grams', 'confidence', 'portionBasis', 'portionNote', 'labelKcalPer100g']);
+    ['name', 'aliases', 'grams', 'confidence', 'portionBasis', 'portionNote', 'labelKcalPer100g', 'labelProteinPer100g', 'labelFatPer100g', 'labelCarbsPer100g', 'labelSugarPer100g', 'labelSodiumMgPer100g']);
   assert.deepEqual(Object.keys(ESTIMATE_SCHEMA.schema.properties), ['kcalPer100g', 'sourceUrl', 'sourceTitle', 'notes', 'servingGrams', 'sameAs']);
 });
 
@@ -133,6 +133,8 @@ test('Claude：辨識與估算帶 output_config.format（json_schema）與 effor
   assert.equal(result.items[0].source, 'llm');
   const [recognition, search, estimate] = fake.calls.map(c => c.params);
   assert.deepEqual(recognition.output_config, { effort: 'medium', format: { type: 'json_schema', schema: RECOGNITION_SCHEMA.schema } });
+  const itemSchema = recognition.output_config.format.schema.properties.items.items;
+  for (const k of ['labelProteinPer100g', 'labelFatPer100g', 'labelCarbsPer100g', 'labelSugarPer100g', 'labelSodiumMgPer100g']) assert.ok(itemSchema.properties[k] && itemSchema.required.includes(k));
   assert.deepEqual(search.output_config, { effort: 'medium' }); assert.ok(search.tools);
   assert.deepEqual(estimate.output_config, { effort: 'medium', format: { type: 'json_schema', schema: ESTIMATE_SCHEMA.schema } });
   for (const p of fake.calls) assert.equal('schema' in p.params, false);

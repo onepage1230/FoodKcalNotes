@@ -291,6 +291,9 @@ test('ChatGPT：辨識與估算帶 strict text.format（json_schema）；搜尋�
   assert.equal(r.items[0].source, 'llm');
   const [recognition, search, estimate] = f.calls.responses;
   assert.deepEqual(recognition.text, { format: { type: 'json_schema', name: 'meal_recognition', strict: true, schema: RECOGNITION_SCHEMA.schema } });
+  const itemSchema = recognition.text.format.schema.properties.items.items; // 標示營養素：五個可空數字欄位，且全部必填（strict）
+  for (const k of ['labelProteinPer100g', 'labelFatPer100g', 'labelCarbsPer100g', 'labelSugarPer100g', 'labelSodiumMgPer100g']) {
+    assert.deepEqual(itemSchema.properties[k], { anyOf: [{ type: 'number' }, { type: 'null' }] }); assert.ok(itemSchema.required.includes(k)); }
   assert.equal(search.text, undefined); assert.deepEqual(search.tools, [{ type: 'web_search' }]);
   assert.deepEqual(estimate.text, { format: { type: 'json_schema', name: 'food_estimate', strict: true, schema: ESTIMATE_SCHEMA.schema } });
   assert.ok(f.calls.responses.every(b => !('schema' in b)));

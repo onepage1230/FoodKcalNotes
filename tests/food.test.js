@@ -89,6 +89,48 @@ test('照片營養標示直接使用，不查熱量；無效值照常查', async
     db.close();
   }
 });
+test('照片營養標示：五項營養素與熱量一起採用，不列入 estimated', async () => {
+  const label = { labelKcalPer100g: 45, labelProteinPer100g: 3.2, labelFatPer100g: 1.5, labelCarbsPer100g: 5, labelSugarPer100g: 4.8, labelSodiumMgPer100g: 50 };
+  const db = createJournal(':memory:'); let calls = 0;
+  const result = await analyzeMeal({ text: '一瓶測試飲料', photo: '', fallback: 'llm', journal: db, emit() {}, infer: async () => { calls++; return answer({ name: '飲料', items: [{ name: '測試飲料', grams: 250, ...label }] }); } });
+  const item = result.items[0]; assert.equal(calls, 1); assert.equal(item.source, 'label');
+  assert.deepEqual([item.proteinPer100g, item.fatPer100g, item.carbsPer100g, item.sugarPer100g, item.sodiumMgPer100g], [3.2, 1.5, 5, 4.8, 50]);
+  assert.deepEqual(item.estimated, []);
+  db.saveMeal({ ...baseMeal(), items: result.items });
+  const food = db.findFood(['測試飲料']); assert.equal(food.proteinPer100g, 3.2); assert.equal(food.sodiumMgPer100g, 50); assert.deepEqual(food.estimated, []); db.close();
+});
+test('照片營養標示：看不清楚的營養素為 null，其餘照常採用', async () => {
+  const db = createJournal(':memory:');
+  const result = await analyzeMeal({ text: '一瓶測試飲料', photo: '', fallback: 'llm', journal: db, emit() {}, infer: async () =>
+    answer({ name: '飲料', items: [{ name: '測試飲料', grams: 250, labelKcalPer100g: 45, labelProteinPer100g: 3, labelFatPer100g: null, labelCarbsPer100g: 5, labelSugarPer100g: null, labelSodiumMgPer100g: 0 }] }) });
+  const item = result.items[0];
+  assert.deepEqual([item.proteinPer100g, item.fatPer100g, item.carbsPer100g, item.sugarPer100g, item.sodiumMgPer100g], [3, null, 5, null, 0]);
+  db.saveMeal({ ...baseMeal(), items: result.items }); db.close();
+});
+test('照片營養標示：各營養素單獨檢查範圍，無效值當 null 且不影響熱量；欄位缺漏也可', async () => {
+  const db = createJournal(':memory:');
+  const result = await analyzeMeal({ text: '一瓶測試飲料', photo: '', fallback: 'llm', journal: db, emit() {}, infer: async () =>
+    answer({ name: '飲料', items: [{ name: '測試飲料', grams: 250, labelKcalPer100g: 45, labelProteinPer100g: -1, labelFatPer100g: '2', labelCarbsPer100g: 5, labelSugarPer100g: 101, labelSodiumMgPer100g: 40001 }] }) });
+  const item = result.items[0]; assert.equal(item.source, 'label'); assert.equal(item.kcalPer100g, 45);
+  assert.deepEqual([item.proteinPer100g, item.fatPer100g, item.carbsPer100g, item.sugarPer100g, item.sodiumMgPer100g], [null, null, 5, null, null]);
+  db.saveMeal({ ...baseMeal(), items: result.items }); db.close();
+});
+test('照片營養標示：三大營養素加總超過 101 g 時全部當 null，餐點仍可保存', async () => {
+  const db = createJournal(':memory:');
+  const result = await analyzeMeal({ text: '一瓶測試飲料', photo: '', fallback: 'llm', journal: db, emit() {}, infer: async () =>
+    answer({ name: '飲料', items: [{ name: '測試飲料', grams: 250, labelKcalPer100g: 45, labelProteinPer100g: 50, labelFatPer100g: 40, labelCarbsPer100g: 20, labelSugarPer100g: 4, labelSodiumMgPer100g: 80 }] }) });
+  const item = result.items[0]; assert.equal(item.kcalPer100g, 45);
+  assert.deepEqual([item.proteinPer100g, item.fatPer100g, item.carbsPer100g], [null, null, null]);
+  assert.equal(item.sugarPer100g, 4); assert.equal(item.sodiumMgPer100g, 80);
+  db.saveMeal({ ...baseMeal(), items: result.items }); db.close();
+});
+test('照片營養標示：標示熱量無效時不採用營養素，改走查詢', async () => {
+  const db = createJournal(':memory:'); let calls = 0;
+  const result = await analyzeMeal({ text: '一瓶測試飲料', photo: '', fallback: 'llm', journal: db, emit() {}, infer: async () =>
+    answer(calls++ === 0 ? { name: '飲料', items: [{ name: '測試飲料', grams: 250, labelKcalPer100g: null, labelProteinPer100g: 3, labelFatPer100g: 1, labelCarbsPer100g: 5, labelSugarPer100g: 4, labelSodiumMgPer100g: 50 }] } : { kcalPer100g: 50, notes: '估算' }) });
+  const item = result.items[0]; assert.equal(calls, 2); assert.equal(item.source, 'llm');
+  assert.ok(![item.proteinPer100g, item.fatPer100g, item.carbsPer100g, item.sugarPer100g, item.sodiumMgPer100g].some(v => typeof v === 'number')); db.close();
+});
 test('真實搜尋引用才標記為 web；虛構引用退回估算', async () => {
   // 引用網址帶 utm 參數、模型網址多結尾斜線，仍算同一頁。
   for (const [valid, cited, given] of [[true, 'https://example.org/nutrition', 'https://example.org/nutrition'],
