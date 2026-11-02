@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
+import { NUTRIENTS, NUTRIENT_KEYS, nutrientTotals } from '../client/nutrients.js';
 
 export const normalize = value => String(value).normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
 export const kcal = item => Math.round(item.grams * item.kcalPer100g / 100);
@@ -46,9 +47,26 @@ export function validateFood(input) {
   const energy = input?.kcalPer100g;
   if (!name || typeof energy !== 'number' || !Number.isFinite(energy) || energy < 0 || energy > 1000)
     throw bad('食物需要名稱，以及 0～1000 的每 100g 熱量。');
+  const values = validNutrients(input);
   return { name, aliases: [...new Set((Array.isArray(input.aliases) ? input.aliases : []).map(a => text(a, 100)).filter(Boolean))].slice(0, 20),
     kcalPer100g: energy, source: ['manual', 'web', 'llm', 'label'].includes(input.source) ? input.source : 'manual',
-    sourceUrl: safeUrl(input.sourceUrl), sourceTitle: text(input.sourceTitle), notes: text(input.notes, 1000) };
+    sourceUrl: safeUrl(input.sourceUrl), sourceTitle: text(input.sourceTitle), notes: text(input.notes, 1000), ...values,
+    // estimated：哪些營養素是 AI 估算的；只保留有值的營養素欄位。
+    estimated: [...new Set(Array.isArray(input.estimated) ? input.estimated : [])].filter(k => NUTRIENT_KEYS.includes(k) && values[k] !== null) };
+}
+// 營養素可為 null（未知）；有值就必須是範圍內的數字。
+function validNutrients(input) {
+  const values = {};
+  for (const { key, label, unit, max } of NUTRIENTS) {
+    const v = input[key];
+    if (v === undefined || v === null) { values[key] = null; continue; }
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > max) throw bad(`營養素「${label}」需為 0～${max} ${unit}（每 100g），或留空。`);
+    values[key] = v;
+  }
+  // 三大營養素不可能超過 100 g；容許 1 g 的四捨五入誤差（例如純油脂類）。
+  const macros = ['proteinPer100g', 'fatPer100g', 'carbsPer100g'].reduce((s, k) => s + (values[k] ?? 0), 0);
+  if (macros > 101) throw bad('營養素不正確：蛋白質、脂肪、碳水化合物加總超過每 100g。');
+  return values;
 }
 export function validateItems(items) {
   if (!Array.isArray(items) || !items.length || items.length > 30) throw bad('每餐需要 1～30 項食物。');
@@ -170,7 +188,7 @@ export function createJournal(filename, { foods: shared = null } = {}) {
   }
   function readMeal(row, withPhoto = true) {
     const items = JSON.parse(row.items);
-    return { id: row.id, day: row.day, time: row.time, name: row.name, items, kcal: items.reduce((s, i) => s + kcal(i), 0),
+    return { id: row.id, day: row.day, time: row.time, name: row.name, items, kcal: items.reduce((s, i) => s + kcal(i), 0), nutrients: nutrientTotals(items),
       ...(withPhoto ? { photo: row.photo } : {}), hasPhoto: !!row.photo };
   }
   function meals(day) {

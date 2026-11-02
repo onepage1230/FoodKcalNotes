@@ -1,10 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Admin from './Admin.jsx';
 import { planGoal } from './plan.js';
+import { NUTRIENTS, nutrientValue, nutrientTotals } from './nutrients.js';
 
 const fmt = n => Math.round(n).toLocaleString('en-US');
 const energy = i => Math.round(i.grams * i.kcalPer100g / 100);
 const total = items => items.reduce((sum, i) => sum + energy(i), 0);
+const fmtAmount = (n, unit) => unit === 'mg' || n >= 10 ? fmt(n) : n.toFixed(1);
+// 營養素總計：未知不當 0；有未知時顯示「至少 X」與未知項數，全部未知顯示「—」。
+const NutrientTotals = ({ totals, count }) => <div className="nutrient-totals">{NUTRIENTS.map(({ total: k, label, unit }) => { const t = totals[k];
+  return <div key={k}><small>{label}</small><b>{t.unknown >= count ? '—' : <>{t.unknown ? '至少 ' : ''}{fmtAmount(t.known, unit)}<small> {unit}</small></>}</b>{t.unknown > 0 && t.unknown < count && <small className="muted">{t.unknown} 項未知</small>}</div>; })}</div>;
 const today = (d = new Date()) => { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const nowTime = () => new Date().toTimeString().slice(0,5);
 const sourceLabel = i => `${i.matched ? '本機庫 · ' : ''}${({manual:'手動資料',web:'網路資料',llm:'LLM 估算',label:'營養標示'})[i.source] || '待確認'}`;
@@ -155,7 +160,7 @@ export default function App() {
   function editItem(index,patch){setDraft(d=>({...d,items:d.items.map((i,k)=>k===index?{...i,...patch}:i)}));}
   // 對應到本機庫的項目改回辨識名稱；熱量需重新填寫，原對應項目保留為可選的相近項目。
   function notSame(index){const i=draft.items[index];const food={id:i.foodId,name:i.name,aliases:i.aliases,kcalPer100g:i.kcalPer100g,source:i.source,sourceUrl:i.sourceUrl,sourceTitle:i.sourceTitle,notes:i.notes};
-    editItem(index,{name:i.recognizedName,aliases:[],kcalPer100g:0,source:'manual',sourceUrl:'',sourceTitle:'',notes:'',matched:false,foodId:'',recognizedName:'',cache:false,similar:[food]});
+    editItem(index,{...Object.fromEntries(NUTRIENTS.map(n=>[n.key,null])),estimated:[],name:i.recognizedName,aliases:[],kcalPer100g:0,source:'manual',sourceUrl:'',sourceTitle:'',notes:'',matched:false,foodId:'',recognizedName:'',cache:false,similar:[food]});
     notify('請填入這項的每100g熱量，或從食物庫選擇。');}
   function useSame(index,f){const i=draft.items[index];editItem(index,{...f,id:i.id,foodId:f.id,grams:i.grams,matched:true,cache:false,recognizedName:i.recognizedName||i.name,similar:[]});}
   // 單項「AI 估算」：名稱當成文字描述跑完整分析，拆成的多項（各自估份量）取代這一項。
@@ -178,7 +183,9 @@ export default function App() {
       try{const m=await api('/api/meals/'+j.mealId);const saved=m.items.find(i=>i.id===r.itemId);setDraft(d=>d?.id===m.id&&saved?{...d,warnings:[...(d.warnings||[]),...(j.result?.warnings||[])],items:d.items.map(i=>i.id===saved.id?saved:i)}:d);await dropJob(j.id).catch(()=>{});notify(`已更新「${r.name}」`);}catch(e){setError(e.message);}})).catch(()=>{});
     tick();const t=setInterval(tick,1500);return()=>{stop=true;clearInterval(t);};},[screen,relookups]);
   function addManual(){setDraft(d=>({...d,items:[...d.items,{id:crypto.randomUUID(),name:'',grams:100,kcalPer100g:0,source:'manual',aliases:[],notes:'',sourceUrl:'',sourceTitle:'',cache:false,matched:false}]}));}
-  const saveDraft=d=>api('/api/meals',{...d,items:d.items.map(i=>({...i,grams:Number(i.grams),kcalPer100g:Number(i.kcalPer100g)}))});
+  const saveDraft=d=>api('/api/meals',{...d,items:d.items.map(i=>({...i,grams:Number(i.grams),kcalPer100g:Number(i.kcalPer100g),...Object.fromEntries(NUTRIENTS.map(n=>[n.key,nutrientValue(i[n.key])]))}))});
+  // 手動改營養素：該欄位不再是估算值；整項不寫入食物庫（同改熱量），熱量來源標籤保留。
+  function editNutrient(index,key,value){editItem(index,{[key]:value,estimated:(draft.items[index].estimated||[]).filter(k=>k!==key),cache:false});}
   async function save(){if(saving)return;const zero=draft.items.filter(i=>!Number(i.kcalPer100g)).length;if(zero&&!window.confirm(`有 ${zero} 項熱量是 0，確定要存嗎？`))return;setSaving(true);setError('');try{
     const result=await saveDraft(draft);setDay(result.day);await loadJournal(result.day);setDraft(null);setText('');setPhoto('');setScreen('home');notify(`已記下「${result.name}」 +${fmt(result.kcal)} kcal`);
   }catch(e){setError(e.message);}finally{setSaving(false);}}
@@ -236,7 +243,7 @@ export default function App() {
       {steps.map((s,i)=><div className="step-bubble" key={i}><small>✓ {s.label}</small><p>{s.message}</p></div>)}
       {busy&&<div className="working"><span className="dots">•••</span> 正在分析，可以先離開 {jobId&&<button className="text-button" onClick={cancelJob}>取消辨識</button>}</div>}
       {!busy&&!draft&&lastInput.current&&<button className="outline" onClick={()=>jobId?retryJob(jobId):analyze(lastInput.current)}>重試</button>}
-      {draft&&<div className="result-card"><div className="result-title"><b>這樣對嗎？</b><strong>{fmt(total(draft.items))}<small> kcal</small></strong></div>
+      {draft&&<div className="result-card"><div className="result-title"><b>這樣對嗎？</b><strong>{fmt(total(draft.items))}<small> kcal</small></strong></div>{!!draft.items.length&&<NutrientTotals totals={nutrientTotals(draft.items)} count={draft.items.length}/>}
         {!draft.id&&!lastInput.current&&<p className="notice">知道熱量和份量時才在這裡記。不確定的話，請回首頁用輸入框描述或拍照，AI 會幫你拆項並估算。</p>}
         <label>餐點名稱<input aria-label="餐點名稱" value={draft.name} onChange={e=>setDraft(d=>({...d,name:e.target.value}))} placeholder={draft.items.length?'留空會用：'+draft.items.map(i=>i.name).filter(Boolean).join('、'):'例如：午餐便當（非必填）'}/></label>
         <div className="two-columns"><label>日期<input type="date" value={draft.day} onChange={e=>setDraft(d=>({...d,day:e.target.value}))}/></label><label>時間<input type="time" value={draft.time} onChange={e=>setDraft(d=>({...d,time:e.target.value}))}/></label></div>
@@ -244,6 +251,7 @@ export default function App() {
         {draft.items.map((item,index)=><div className="draft-item" key={item.id}>
           <div className="food-name"><input aria-label={'食物名稱 '+(index+1)} value={item.name} onChange={e=>editItem(index,{name:e.target.value,cache:false,source:'manual',matched:false,foodId:'',sourceUrl:'',sourceTitle:'',aliases:[]})} placeholder="食物名稱"/><button className="remove" aria-label={'移除 '+item.name} onClick={()=>setDraft(d=>({...d,items:d.items.filter((_,i)=>i!==index)}))}>✕</button></div>
           {source(item)}<div className="food-numbers"><label>重量 g<input aria-label={'重量 '+(index+1)} type="number" inputMode="numeric" min="1" max="5000" step="1" value={item.grams} onChange={e=>editItem(index,{grams:e.target.value})}/></label><label>kcal / 100g<input aria-label={'每100g熱量 '+(index+1)} type="number" inputMode="decimal" min="0" max="1000" step="0.1" value={item.kcalPer100g} onChange={e=>editItem(index,{kcalPer100g:e.target.value,cache:false,source:'manual',matched:false,foodId:'',sourceUrl:'',sourceTitle:'',notes:'使用者手動調整熱量。'})}/></label><strong>{fmt(energy(item))}<small> kcal</small></strong></div>
+          <details className="nutrients"><summary>營養素 <small className="muted">{NUTRIENTS.filter(n=>nutrientValue(item[n.key])!==null).length}/5 項有資料{item.estimated?.length?' · 含估算':''}</small></summary><div className="nutrient-grid">{NUTRIENTS.map(({key,label,unit,max})=><label key={key}><span>{label} {unit}/100g{item.estimated?.includes(key)&&<span className="source llm">估</span>}</span><input aria-label={label+' '+(index+1)} type="number" inputMode="decimal" min="0" max={max} step={unit==='mg'?1:0.1} placeholder="未知" value={item[key]??''} onChange={e=>editNutrient(index,key,e.target.value)}/></label>)}</div></details>
           {!Number(item.kcalPer100g)&&item.name.trim()&&<button className="outline full" disabled={estimating.includes(item.id)} onClick={()=>estimate(item)}>{estimating.includes(item.id)?'估算中…':'AI 估算'}</button>}
           {item.name.trim()&&<button className="outline full" disabled={estimating.includes(item.id)||relookups.some(r=>r.itemId===item.id)} onClick={()=>relookup(item)}>{relookups.some(r=>r.itemId===item.id)?'查詢中…可以先離開':'以新名稱重新查詢'}</button>}
           {item.portionNote&&<p className="muted tiny">{item.portionNote}</p>}{sourceDetails(item)}
@@ -253,7 +261,7 @@ export default function App() {
         <div className="button-row"><button className="outline" onClick={addManual}>＋ 手動加項</button><button className="outline" onClick={()=>openFoods(true)}>＋ 從食物庫選</button></div>
         <p className="muted tiny">份量與熱量皆可修改。照片辨識及 LLM 數字為估計值。</p><button className="primary full" disabled={saving||!draft.items.length} onClick={save}>{saving?'保存中…':draft.id?'保存修改':'對，記下來'}</button>
       </div>}<div ref={threadEnd}/></div></div>}
-    {screen==='detail'&&detail&&<div className="screen">{back(detail.day+' · '+detail.time)}<div className="scroll page-pad"><h1>{detail.name}</h1><div className="detail-total">{fmt(detail.kcal)}<small> kcal</small></div>{detail.photo&&<img className="detail-photo" src={detail.photo} alt={detail.name}/>}
+    {screen==='detail'&&detail&&<div className="screen">{back(detail.day+' · '+detail.time)}<div className="scroll page-pad"><h1>{detail.name}</h1><div className="detail-total">{fmt(detail.kcal)}<small> kcal</small></div><NutrientTotals totals={detail.nutrients||nutrientTotals(detail.items)} count={detail.items.length}/>{detail.photo&&<img className="detail-photo" src={detail.photo} alt={detail.name}/>}
       <div className="card">{detail.items.map((i,k)=><div className="detail-item" key={k}><div><b>{i.name}</b>{source(i)}</div><p>{i.grams}g <strong>{fmt(energy(i))} kcal</strong></p>{sourceDetails(i)}</div>)}</div>
       <button className="primary full" onClick={()=>{setDraft({...detail,warnings:[],note:''});setPhoto('');setText('');setSteps([]);setScreen('result');}}>編輯這筆紀錄</button><button className="outline danger full" onClick={removeMeal}>刪除這筆紀錄</button></div></div>}
     {screen==='history'&&<div className="screen">{back('這一週')}<div className="scroll page-pad"><label>選擇日期<input type="date" value={day} min={since} max={today()} onChange={e=>chooseDay(e.target.value)}/></label><p className="muted">本週平均（含未記錄日）</p><div className="detail-total">{fmt(week.filter(h=>h.day<=today()&&h.day>=since).reduce((s,h,_,a)=>s+h.kcal/a.length,0))}<small> kcal</small></div><p className="muted tiny">未記錄不代表沒有進食。</p>{week.filter(h=>h.day<=today()&&h.day>=since).reverse().map(h=><button className="history-row" key={h.day} onClick={()=>chooseDay(h.day)}><i style={{background:h.kcal>settings.goal?'var(--peach)':'var(--purple)'}}/><span>{h.day.slice(5).replace('-','/')}　週{'日一二三四五六'[new Date(h.day+'T12:00:00').getDay()]}</span><small>{h.count?h.count+' 餐':'未記錄'}</small><strong>{fmt(h.kcal)}</strong></button>)}</div></div>}
