@@ -23,7 +23,9 @@ const before = journal.foods().length;
 
 if (!dryRun) {
   const stamp = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().replace(/\D/g, '').slice(0, 14).replace(/^(\d{8})/, '$1-');
-  const backup = path.join(dataDirectory, `meals-backup-${stamp}.sqlite`);
+  // 同一秒內連續執行（例如先匯入再補值）時檔名會重複，加序號避免 VACUUM INTO 失敗。
+  let backup = path.join(dataDirectory, `meals-backup-${stamp}.sqlite`);
+  for (let n = 2; fs.existsSync(backup); n++) backup = path.join(dataDirectory, `meals-backup-${stamp}-${n}.sqlite`);
   const db = new DatabaseSync(filename); db.exec('PRAGMA busy_timeout=3000'); db.prepare('VACUUM INTO ?').run(backup); db.close();
   console.log(`備份：${backup}`);
 } else console.log('--dry-run：只回報，不寫入。');
