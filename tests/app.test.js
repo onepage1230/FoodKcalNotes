@@ -856,7 +856,7 @@ test('候選餐點：一整天沒記時早餐午餐同時列出；點選後以�
   assert.deepEqual(m.items.map(({ id, ...i }) => i), src.items.map(({ id, ...i }) => i)); assert.equal(m.kcal, src.kcal);
   assert.deepEqual((await list()).map(c => c.name), ['午餐']); // 補記後早餐候選消失
 });
-test('候選餐點：朋友日誌互不影響；假日先回傳空清單', async t => {
+test('候選餐點：朋友日誌互不影響；週六同樣各自計算', async t => {
   const { clock, save, list } = await candidateFixture(t);
   const friend = friendHeaders('friend@example.com');
   await save('2026-11-03', '08:00', toastItems(), '早餐'); await save('2026-11-04', '08:00', toastItems(), '早餐');
@@ -864,6 +864,25 @@ test('候選餐點：朋友日誌互不影響；假日先回傳空清單', async
   assert.deepEqual((await list()).map(c => c.name), ['早餐']);
   assert.deepEqual((await list(friend)).map(c => c.name), ['朋友午餐']);
   assert.deepEqual(await list(friendHeaders('other@example.com')), []);
-  clock.at = new Date(2026, 10, 7, 13, 0); // 週六
-  assert.deepEqual(await list(), []);
+  clock.at = new Date(2026, 10, 7, 13, 0); // 週六：最近吃過，各自計算
+  assert.deepEqual((await list()).map(c => c.name), ['早餐']);
+  assert.deepEqual((await list(friend)).map(c => c.name), ['朋友午餐']);
+  assert.deepEqual(await list(friendHeaders('other@example.com')), []);
+});
+test('候選餐點：假日顯示最近吃過（含平日、只吃一次），時間為最近一次，點選後存成今天', async t => {
+  const { f, clock, save, list } = await candidateFixture(t, new Date(2026, 10, 7, 13, 0)); // 週六
+  const dinner = [{ name: '晚餐', grams: 100, kcalPer100g: 100, source: 'manual' }];
+  await save('2026-11-02', '07:00', toastItems(), '早餐'); await save('2026-11-03', '07:10', toastItems(), '早餐');
+  const lastBreakfast = await save('2026-11-06', '10:20', toastItems(80), '週五早餐');
+  const once = await save('2026-11-01', '12:30', lunch, '週日午餐'); // 只吃一次，週日也算
+  await save('2026-10-07', '12:00', [{ name: '舊的', grams: 100, kcalPer100g: 100, source: 'manual' }]); // 第 31 天不計
+  await save('2026-11-06', '18:00', dinner, '晚於現在');
+  const all = await list();
+  assert.deepEqual(all.map(c => [c.time, c.name, c.count, c.mealId]), [['10:20', '週五早餐', 3, lastBreakfast.id], ['12:30', '週日午餐', 1, once.id]]);
+  const res = await f.request(`/api/meals/${all[0].mealId}/repeat`, { time: all[0].time }); const m = await res.json();
+  assert.equal(res.status, 200); assert.equal(m.day, '2026-11-07'); assert.equal(m.time, '10:20'); assert.equal(m.name, '週五早餐');
+  assert.deepEqual(m.items.map(({ id, ...i }) => i), lastBreakfast.items.map(({ id, ...i }) => i));
+  assert.deepEqual((await list()).map(c => c.name), ['週日午餐']); // 10:20 已記，早餐候選消失
+  clock.at = new Date(2026, 10, 9, 13, 0); // 週一回到平日規則：只算平日、至少 2 次
+  assert.deepEqual((await list()).map(c => [c.name, c.count]), [['週五早餐', 3]]);
 });

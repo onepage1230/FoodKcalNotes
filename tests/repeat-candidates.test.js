@@ -63,10 +63,67 @@ test('平日只算過去的平日；至少出現 2 次', () => {
   assert.deepEqual(pick([toast('2026-11-04', '08:00'), toast('2026-11-05', '07:00')]), []);
 });
 
-test('假日（週六、日）本張先回傳空清單（ticket 03 補）', () => {
-  const list = [toast('2026-11-03', '08:00'), toast('2026-11-04', '08:00')];
-  assert.deepEqual(pick(list, new Date(2026, 10, 7, 13, 0)), []);
-  assert.deepEqual(pick(list, new Date(2026, 10, 8, 13, 0)), []);
+// 假日規則（ticket 03）：週六 2026-11-07、週日 11-08 的 13:00。統計 30 天內所有日子，依最近一次由近到遠，時間用最近一次實際時間。
+const SAT = new Date(2026, 10, 7, 13, 0), SUN = new Date(2026, 10, 8, 13, 0);
+test('假日：候選包含平日吃過的餐點，且只出現一次也成為候選（count 為 1）', () => {
+  const only = toast('2026-11-04', '08:00'); // 週三，僅 1 次
+  for (const at of [SAT, SUN]) assert.deepEqual(pick([only], at).map(c => [c.mealId, c.count, c.time]), [[only.id, 1, '08:00']]);
+});
+test('假日：統計平日與假日所有日子，count 為 30 天內所有日子的出現次數', () => {
+  const list = [toast('2026-11-06', '08:00'), toast('2026-11-01', '09:00'), toast('2026-10-28', '07:00')]; // 週五、週日、週三
+  assert.equal(pick(list, SAT)[0].count, 3);
+});
+test('假日：30 天邊界以假日當天往前算；今天（假日）自己的餐點不歸納、未來不計', () => {
+  assert.equal(pick([toast('2026-10-08', '08:00')], SAT)[0].count, 1); // 週六往前第 30 天
+  assert.deepEqual(pick([toast('2026-10-07', '08:00')], SAT), []); // 第 31 天
+  assert.deepEqual(pick([toast('2026-11-07', '07:00'), toast('2026-11-09', '08:00')], SAT), []);
+});
+test('假日：時間用最近一次實際時間，不用中位數', () => {
+  const list = [toast('2026-11-02', '07:00'), toast('2026-11-03', '07:10'), toast('2026-11-06', '11:20')];
+  assert.equal(pick(list, SAT)[0].time, '11:20'); // 中位數會是 07:10
+  assert.equal(pick(list, SAT)[0].mealId, list[2].id);
+});
+test('假日：依最近一次由近到遠選取（同日看時間，同日同時刻以先出現者為準）', () => {
+  const rank = list => pick(list, SAT).map(x => x.name);
+  const six = ['F', 'G', 'H', 'I', 'J', 'K'].map((n, i) => meal(`2026-11-0${6 - i}`, '08:00', [n]));
+  assert.deepEqual(rank(six).sort(), ['F', 'G', 'H', 'I', 'J']); // K（11-01）最舊，被擠掉
+  const sameDay = ['P', 'Q', 'R', 'S', 'T', 'U'].map((n, i) => meal('2026-11-06', `0${i + 1}:00`, [n]));
+  assert.deepEqual(rank(sameDay), ['Q', 'R', 'S', 'T', 'U']); // 同一天看時間：01:00 的 P 最舊
+  const tie = rank(['X', 'Y1', 'Y2', 'Y3', 'Y4', 'Y5'].map(n => meal('2026-11-04', '09:30', [n])));
+  assert.deepEqual(tie, ['X', 'Y1', 'Y2', 'Y3', 'Y4']); // 同日同時刻：先出現者優先，Y5 被擠掉
+});
+test('假日：同一組合以最近一次為代表（項目、克數、名稱）', () => {
+  const old = meal('2026-11-03', '08:00', [['吐司', 60], ['豆漿', 250]], { name: '舊' });
+  const latest = meal('2026-11-06', '09:15', [['豆漿', 300], ['吐司', 90]], { name: '新' });
+  assert.deepEqual(pick([latest, old], SUN), [{ mealId: latest.id, name: '新', items: [{ name: '豆漿', grams: 300 }, { name: '吐司', grams: 90 }], kcal: 390, time: '09:15', count: 2 }]);
+});
+test('假日：套用不晚於現在與 90 分鐘內已有餐點則排除，並先過濾再取前 5 個', () => {
+  const late = meal('2026-11-06', '13:01', ['晚於現在']), onTime = meal('2026-11-06', '13:00', ['剛好現在']);
+  assert.deepEqual(pick([late, onTime], SAT).map(c => c.name), ['剛好現在']);
+  const history = [toast('2026-11-06', '08:00')];
+  const withToday = (time, at = SAT) => pick([...history, meal(at === SAT ? '2026-11-07' : '2026-11-08', time, ['別的'])], at);
+  assert.deepEqual(withToday('09:30'), []); assert.deepEqual(withToday('06:30', SUN), []); assert.equal(withToday('09:31').length, 1); assert.equal(withToday('06:29', SUN).length, 1);
+  // 先過濾：最近的三種被今天 11:30 的餐點擋掉，不佔 5 個名額
+  const near = ['N1', 'N2', 'N3'].map((n, i) => meal(`2026-11-0${6 - i}`, '11:00', [n]));
+  const far = ['F1', 'F2', 'F3', 'F4', 'F5'].map((n, i) => meal(`2026-10-${20 - i}`, `0${5 + i}:00`, [n]));
+  assert.deepEqual(pick([...near, ...far, meal('2026-11-07', '11:30', ['點心'])], SAT).map(c => c.name), ['F1', 'F2', 'F3', 'F4', 'F5']);
+});
+test('假日：最多 5 個，輸出依時間由早到晚', () => {
+  const names = ['A', 'B', 'C', 'D', 'E', 'F'], times = ['12:00', '07:00', '10:00', '08:30', '09:00', '06:00'];
+  const list = names.map((n, i) => meal(`2026-11-0${6 - i}`, times[i], [n])); // A 最近、F 最舊
+  assert.deepEqual(pick(list, SAT).map(c => `${c.time} ${c.name}`), ['07:00 B', '08:30 D', '09:00 E', '10:00 C', '12:00 A']);
+});
+test('平日、假日切換邊界：週五、週一用平日規則（至少 2 次、只算平日、中位數），週六、週日用假日規則', () => {
+  const list = [toast('2026-11-02', '07:00'), toast('2026-11-03', '08:00'), toast('2026-11-06', '10:00')]; // 週一、週二、週五
+  const single = [meal('2026-11-04', '08:00', ['單次'])];
+  const FRI = new Date(2026, 10, 6, 13, 0), MON = new Date(2026, 10, 9, 13, 0);
+  assert.deepEqual(pick(single, FRI), []); assert.deepEqual(pick(single, MON), []); // 平日：1 次不算
+  assert.equal(pick(single, SAT).length, 1); assert.equal(pick(single, SUN).length, 1); // 假日：1 次也算
+  assert.equal(pick(list, FRI)[0].time, '07:30'); // 週五看不到當天的餐點，只剩週一、週二兩次：中位數 07:30
+  assert.equal(pick(list, MON)[0].count, 3); assert.equal(pick(list, MON)[0].time, '08:00');
+  assert.equal(pick(list, SAT)[0].time, '10:00'); assert.equal(pick(list, SUN)[0].time, '10:00'); // 假日用最近一次
+  assert.deepEqual(pick([toast('2026-11-07', '08:00'), toast('2026-11-08', '08:00')], MON), []); // 週一不計上週六、日
+  assert.deepEqual(pick([toast('2026-11-05', '08:00')], FRI), []); assert.equal(pick([toast('2026-11-05', '08:00')], SAT).length, 1);
 });
 
 test('常見時間：奇數筆取中位數、偶數筆取中間兩筆平均', () => {
