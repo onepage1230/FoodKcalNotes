@@ -11,7 +11,7 @@ export function allowedModel(slug) {
 }
 
 export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', journalFor = null, listJournals = null,
-  oauth = createOAuth(), fetcher = fetch, journal = null, anthropicFactory = createClaudeClient, chatgptShared = false, friendsCache = false, devMode = false }) {
+  oauth = createOAuth(), fetcher = fetch, journal = null, anthropicFactory = createClaudeClient, chatgptShared = false, friendsCache = false, devMode = false, now = () => new Date() }) {
   const app = express();
   // 遠端網址（例如 Tailscale serve 的 https://xxx.ts.net）只能使用日誌，不能管理 ChatGPT 登入。
   const origins = [origin, ...remoteOrigins];
@@ -313,7 +313,7 @@ export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', 
     store.save();
     res.json(providersView());
   });
-  if (journal) attachFoodRoutes(app, { journal, requireProvider, providerChain, running, friendsCache });
+  if (journal) attachFoodRoutes(app, { journal, requireProvider, providerChain, running, friendsCache, now });
   // Vite 或靜態畫面會在 server.js 接上，因此回傳獨立的錯誤 middleware。
   const errors = (error, req, res, next) => {
     if (res.headersSent) return next(error);

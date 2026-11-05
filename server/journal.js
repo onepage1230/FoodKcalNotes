@@ -242,6 +242,11 @@ export function createJournal(filename, { foods: shared = null } = {}) {
     if (!validDate(day)) throw bad('日期格式不正確。');
     return db.prepare('SELECT * FROM meals WHERE day=? ORDER BY time DESC,created_at DESC').all(day).map(row => readMeal(row, false));
   }
+  // 候選餐點用：from（含）之後的所有餐點，新到舊；不讀照片內容（photo 欄只取是否有照片），避免載入大量 base64。
+  function mealsSince(from) {
+    if (!validDate(from)) throw bad('日期格式不正確。');
+    return db.prepare("SELECT id,day,time,name,items,photo<>'' AS photo FROM meals WHERE day>=? ORDER BY day DESC,time DESC,created_at DESC").all(from).map(row => readMeal(row, false));
+  }
   // 當日營養素：所有餐點的所有項目一起算，未知數是項目數（與 nutrientTotals 一致）。
   function dayNutrients(day) { return nutrientTotals(meals(day).flatMap(m => m.items)); }
   function meal(id) { const row = db.prepare('SELECT * FROM meals WHERE id=?').get(id); return row ? readMeal(row) : null; }
@@ -318,7 +323,7 @@ export function createJournal(filename, { foods: shared = null } = {}) {
   };
   function getJob(id) { const row = db.prepare('SELECT * FROM jobs WHERE id=?').get(id); return row ? readJob(row, true) : null; }
   const deleteJob = id => db.prepare('DELETE FROM jobs WHERE id=?').run(id).changes;
-  return { close: () => db.close(), getMeta, setMeta, stats, recentMeals, ...library, preferences, updatePreferences, meals, dayNutrients, meal, saveMeal, week, streak,
+  return { close: () => db.close(), getMeta, setMeta, stats, recentMeals, ...library, preferences, updatePreferences, meals, mealsSince, dayNutrients, meal, saveMeal, week, streak,
     createJob, updateJob, listJobs, getJob, deleteJob,
     deleteMeal: id => { db.prepare("DELETE FROM jobs WHERE status='done' AND meal_id=?").run(id); return db.prepare('DELETE FROM meals WHERE id=?').run(id).changes; },
     exportData: () => ({ version: 1, settings: preferences(), foods: library.foods(), meals: db.prepare('SELECT * FROM meals ORDER BY day,time').all().map(row => readMeal(row)) }),

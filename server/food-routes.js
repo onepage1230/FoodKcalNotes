@@ -1,6 +1,7 @@
 import { analyzeMeal, lookupItem, backfillNutrients } from './food-analysis.js';
 import { NUTRIENT_KEYS } from '../client/nutrients.js';
 import { validPhoto, validDate } from './journal.js';
+import { repeatCandidates, localDay, shiftDay, RANGE_DAYS } from './repeat-candidates.js';
 
 // 單次模型呼叫逾時（預設 150 秒）就重試一次；再逾時丟出 error.timeout。其他錯誤（額度、授權）不重試。
 export async function retryOnTimeout(call, signal, ms = 150000) {
@@ -22,7 +23,8 @@ export function fallbackWorthy(error) {
   return /usage_limit|usage_unavailable|rate_limit|insufficient|quota|overloaded|server_error|invalid_request|分析連線中斷/i.test(error?.message || '');
 }
 
-export function attachFoodRoutes(app, { requireProvider, providerChain, running, friendsCache = false }) {
+// now：伺服器本地的「現在」（測試可注入）；候選餐點與再記一次的「今天」都由它決定。
+export function attachFoodRoutes(app, { requireProvider, providerChain, running, friendsCache = false, now = () => new Date() }) {
   // FRIENDS_CACHE 未開啟時，朋友存的餐點不寫入共用食物庫（不新增食物、不加別名），避免用自填熱量污染共用庫。
   const shareFoods = req => friendsCache || !req.friend;
   // 分析與 AI 估算共用：依服務順序建立可停止的 infer（每次呼叫各自逾時重試，失敗才換下一個服務）；沒有服務能用時回傳 null。
@@ -64,10 +66,14 @@ export function attachFoodRoutes(app, { requireProvider, providerChain, running,
   // 一律 shareFoods:false——不寫共用食物庫、不補營養素、不加別名（ADR 0004、0010、0011），與朋友是否開 FRIENDS_CACHE 無關。
   app.post('/api/meals/:id/repeat', (req, res) => {
     const source = req.journal.meal(req.params.id); if (!source) return res.status(404).json({ error: '找不到餐點。' });
-    const at = new Date(), pad = n => String(n).padStart(2, '0'), time = req.body?.time === undefined ? `${pad(at.getHours())}:${pad(at.getMinutes())}` : req.body.time;
+    const at = now(), pad = n => String(n).padStart(2, '0'), time = req.body?.time === undefined ? `${pad(at.getHours())}:${pad(at.getMinutes())}` : req.body.time;
     if (typeof time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return res.status(400).json({ error: '時間格式不正確，請使用 HH:MM。' });
     res.json(req.journal.saveMeal({ name: source.name, day: `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`, time,
       items: source.items.map(({ id, ...item }) => item) }, { shareFoods: false }));
+  });
+  // 候選餐點（ADR 0011）：唯讀，「現在」與「今天」由伺服器決定，客戶端不傳；只讀這本日誌今天往前 30 天的餐點。
+  app.get('/api/repeat-candidates', (req, res) => {
+    const at = now(); res.json({ candidates: repeatCandidates(req.journal.mealsSince(shiftDay(localDay(at), -RANGE_DAYS)), at) });
   });
   app.delete('/api/meals/:id', (req, res) => { req.journal.deleteMeal(req.params.id); res.json({ ok: true }); });
   app.post('/api/settings', (req, res) => res.json(req.journal.updatePreferences(req.body)));

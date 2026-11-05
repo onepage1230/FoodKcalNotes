@@ -811,3 +811,59 @@ test('再記一次：朋友日誌只能複製自己日誌的餐點，且不碰�
   assert.equal((await (await f.request('/api/journal?day=' + localToday(), null, friend)).json()).meals.length, 1);
   assert.equal((await (await f.request('/api/journal?day=' + localToday())).json()).meals.length, 0); // 擁有者日誌不受影響
 });
+
+// 候選餐點（repeat-meals ticket 02）：GET /api/repeat-candidates；「現在」由 createApp 的 now 注入（2026-11-05 週四 13:00）。
+async function candidateFixture(t, at = new Date(2026, 10, 5, 13, 0)) {
+  const clock = { at }; const f = await fixture(t, { now: () => new Date(clock.at) });
+  const save = (day, time, items, name, headers) => f.request('/api/meals', { name, day, time, items }, headers).then(r => r.json());
+  const list = async headers => { const res = await f.request('/api/repeat-candidates', null, headers); assert.equal(res.status, 200); return (await res.json()).candidates; };
+  return { f, clock, save, list };
+}
+const toastItems = (toast = 60, soy = 250) => [{ name: '吐司', grams: toast, kcalPer100g: 260, source: 'web', sourceUrl: 'https://example.com/t' }, { name: '豆漿', grams: soy, kcalPer100g: 35, source: 'llm', proteinPer100g: 3.5, estimated: ['proteinPer100g'] }];
+const lunch = [{ name: '雞腿便當', grams: 500, kcalPer100g: 160, source: 'manual' }];
+test('候選餐點：回傳欄位（名稱、項目摘要、總熱量、時間、出現次數、來源餐點 id），同一種採最近克數', async t => {
+  const { save, list } = await candidateFixture(t);
+  await save('2026-11-03', '08:00', toastItems(), '早餐');
+  const latest = await save('2026-11-04', '08:30', [...toastItems(90, 300)].reverse(), '最近早餐');
+  assert.deepEqual(await list(), [{ mealId: latest.id, name: '最近早餐', items: [{ name: '豆漿', grams: 300 }, { name: '吐司', grams: 90 }], kcal: latest.kcal, time: '08:15', count: 2 }]);
+});
+test('候選餐點：30 天邊界、刪除不計、只算平日、至少 2 次、中位數、晚於現在與 90 分鐘內不顯示', async t => {
+  const { f, save, list } = await candidateFixture(t);
+  await save('2026-10-05', '08:00', toastItems()); // 第 31 天：不計
+  await save('2026-11-04', '08:00', toastItems());
+  assert.deepEqual(await list(), []);
+  const old = await save('2026-10-06', '07:00', toastItems()); // 第 30 天：計入
+  assert.equal((await list())[0].count, 2); assert.equal((await list())[0].time, '07:30');
+  await f.request('/api/meals/' + old.id, undefined, { method: 'DELETE' });
+  assert.deepEqual(await list(), []); // 刪除後不計
+  await save('2026-10-31', '08:00', toastItems()); await save('2026-11-01', '08:00', toastItems()); // 週末不計
+  assert.deepEqual(await list(), []);
+  await save('2026-11-02', '07:00', toastItems()); await save('2026-11-03', '10:00', toastItems());
+  assert.equal((await list())[0].time, '08:00'); // 07:00、08:00、10:00 的中位數
+  await save('2026-11-03', '13:30', lunch); await save('2026-11-04', '13:30', lunch); // 晚於現在 13:00
+  assert.deepEqual((await list()).map(c => c.name), ['吐司、豆漿']);
+  await save('2026-11-05', '09:30', [{ name: '咖啡', grams: 200, kcalPer100g: 10 }]); // 與 08:00 相差 90 分（含）
+  assert.deepEqual(await list(), []);
+});
+test('候選餐點：一整天沒記時早餐午餐同時列出；點選後以常見時間存成今天，內容同來源；補記後消失', async t => {
+  const { f, save, list } = await candidateFixture(t);
+  await save('2026-11-03', '10:20', toastItems(), '早餐'); const src = await save('2026-11-04', '10:40', toastItems(70), '早餐');
+  await save('2026-11-03', '12:00', lunch, '午餐'); await save('2026-11-04', '12:10', lunch, '午餐');
+  const all = await list();
+  assert.deepEqual(all.map(c => [c.time, c.name]), [['10:30', '早餐'], ['12:05', '午餐']]);
+  const res = await f.request(`/api/meals/${all[0].mealId}/repeat`, { time: all[0].time }); const m = await res.json();
+  assert.equal(res.status, 200); assert.equal(m.day, '2026-11-05'); assert.equal(m.time, '10:30'); assert.equal(m.name, '早餐');
+  assert.deepEqual(m.items.map(({ id, ...i }) => i), src.items.map(({ id, ...i }) => i)); assert.equal(m.kcal, src.kcal);
+  assert.deepEqual((await list()).map(c => c.name), ['午餐']); // 補記後早餐候選消失
+});
+test('候選餐點：朋友日誌互不影響；假日先回傳空清單', async t => {
+  const { clock, save, list } = await candidateFixture(t);
+  const friend = friendHeaders('friend@example.com');
+  await save('2026-11-03', '08:00', toastItems(), '早餐'); await save('2026-11-04', '08:00', toastItems(), '早餐');
+  await save('2026-11-03', '12:00', lunch, '朋友午餐', friend); await save('2026-11-04', '12:00', lunch, '朋友午餐', friend);
+  assert.deepEqual((await list()).map(c => c.name), ['早餐']);
+  assert.deepEqual((await list(friend)).map(c => c.name), ['朋友午餐']);
+  assert.deepEqual(await list(friendHeaders('other@example.com')), []);
+  clock.at = new Date(2026, 10, 7, 13, 0); // 週六
+  assert.deepEqual(await list(), []);
+});

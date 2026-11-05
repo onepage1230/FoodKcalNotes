@@ -3,6 +3,7 @@ import Admin from './Admin.jsx';
 import { planGoal } from './plan.js';
 import { NUTRIENT_GOALS, nutrientGoals, goalStatus, GOAL_STATUS_TEXT } from './nutrient-goals.js';
 import { NUTRIENTS, nutrientValue, nutrientTotals, kcalMismatch } from './nutrients.js';
+import { showCandidates } from './candidate-view.js';
 
 const fmt = n => Math.round(n).toLocaleString('en-US');
 const energy = i => Math.round(i.grams * i.kcalPer100g / 100);
@@ -72,7 +73,7 @@ export default function App() {
   const [screen,setScreen]=useState('home');
   const [status,setStatus]=useState(null); const [models,setModels]=useState([]);
   const [settings,setSettings]=useState({goal:1800,fallback:'web',model:''});
-  const [day,setDay]=useState(today); const [meals,setMeals]=useState([]); const [week,setWeek]=useState([]); const [since,setSince]=useState(''); const [streak,setStreak]=useState(0); const [dayNutrients,setDayNutrients]=useState(null); const [goalsSince,setGoalsSince]=useState('');
+  const [day,setDay]=useState(today); const [meals,setMeals]=useState([]); const [week,setWeek]=useState([]); const [since,setSince]=useState(''); const [streak,setStreak]=useState(0); const [dayNutrients,setDayNutrients]=useState(null); const [candidates,setCandidates]=useState([]); const [goalsSince,setGoalsSince]=useState('');
   const [text,setText]=useState(''); const [photo,setPhoto]=useState('');
   const [draft,setDraft]=useState(null); const [detail,setDetail]=useState(null); const [steps,setSteps]=useState([]); const [estimating,setEstimating]=useState([]); const [relookups,setRelookups]=useState([]);
   const [busy,setBusy]=useState(false); const [jobId,setJobId]=useState(null); const [jobs,setJobs]=useState([]); const [jobsOpen,setJobsOpen]=useState(false); const [saving,setSaving]=useState(false); const [error,setError]=useState(''); const [toast,setToast]=useState('');
@@ -96,7 +97,10 @@ export default function App() {
   }
   const notify=message=>{setToast(message);};
   useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(''),3500);return()=>clearTimeout(t);},[toast]);
+  // 候選餐點只屬於今天：每次載入今天的日誌（記完、刪除、換日都會呼叫 loadJournal）就重新取得；失敗只是不顯示。
+  const loadCandidates=()=>api('/api/repeat-candidates').then(d=>setCandidates(d.candidates),()=>setCandidates([]));
   async function loadJournal(date=day,keepWeek) {
+    if(date===today())loadCandidates();else setCandidates([]);
     const data=await api('/api/journal?day='+date+'&today='+today());setMeals(data.meals);if(!keepWeek)setWeek(data.week);setSince(data.since||today());setStreak(data.streak);setDayNutrients(data.dayNutrients);setGoalsSince(data.nutrientGoalsSince||'');setSettings(data.settings);setGoalInput(String(data.settings.goal));
     return data;
   }
@@ -129,7 +133,7 @@ export default function App() {
   },[theme]);
   useEffect(()=>{threadEnd.current?.scrollIntoView({behavior:'smooth'});},[steps,busy]);
   // 換日後重新載入，避免午夜後仍把新紀錄放在昨天。
-  useEffect(()=>{let old=today();const go=d=>{setDay(d);loadJournal(d).catch(e=>setError(e.message));};const t=setInterval(()=>{const next=today();if(next!==old){if(day===old)go(next);old=next;}},30000);const wake=()=>{if(document.visibilityState!=='visible')return;if(day===today())refreshJobs();else{go(today());loadJobs().catch(()=>{});}};document.addEventListener('visibilitychange',wake);addEventListener('pageshow',wake);return()=>{clearInterval(t);document.removeEventListener('visibilitychange',wake);removeEventListener('pageshow',wake);};},[day]);
+  useEffect(()=>{let old=today();const go=d=>{setDay(d);loadJournal(d).catch(e=>setError(e.message));};const t=setInterval(()=>{const next=today();if(next!==old){if(day===old)go(next);old=next;}},30000);const wake=()=>{if(document.visibilityState!=='visible')return;if(day===today()){refreshJobs();loadCandidates();}else{go(today());loadJobs().catch(()=>{});}};document.addEventListener('visibilitychange',wake);addEventListener('pageshow',wake);return()=>{clearInterval(t);document.removeEventListener('visibilitychange',wake);removeEventListener('pageshow',wake);};},[day]);
   async function chooseDay(value,keepWeek){setDay(value);try{await loadJournal(value,keepWeek);setScreen('home');}catch(e){setError(e.message);}}
   // Horizontal swipe that follows the finger. pick(dir) gets -1 (finger left) / 1 (finger right) and returns the action to run, or nothing to resist and spring back.
   function swipe(pick){
@@ -202,7 +206,8 @@ export default function App() {
     const result=await saveDraft(draft);setDay(result.day);await loadJournal(result.day);setDraft(null);setText('');setPhoto('');setScreen('home');notify(`已記下「${result.name}」 +${fmt(result.kcal)} kcal`);
   }catch(e){setError(e.message);}finally{setSaving(false);}}
   async function openMeal(id){try{setDetail(await api('/api/meals/'+id));setScreen('detail');setError('');}catch(e){setError(e.message);}}
-  async function repeatMeal(){try{const m=await api(`/api/meals/${detail.id}/repeat`,{});setDay(m.day);await loadJournal(m.day);setDetail(m);setScreen('detail');setError('');notify(`已記錄「${m.name}」 +${fmt(m.kcal)} kcal`);}catch(e){setError(e.message);}}
+  // 再記一次：詳情頁不帶時間（用現在）；首頁候選帶它的常見時間。
+  async function repeatMeal(id=detail.id,time){try{const m=await api(`/api/meals/${id}/repeat`,time?{time}:{});setDay(m.day);await loadJournal(m.day);setDetail(m);setScreen('detail');setError('');notify(`已記錄「${m.name}」 +${fmt(m.kcal)} kcal`);}catch(e){setError(e.message);}}
   async function removeMeal(){if(!window.confirm('刪除這筆餐點紀錄？'))return;try{await api('/api/meals/'+detail.id,undefined,'DELETE');setJobs(js=>js.filter(j=>!(j.status==='done'&&j.mealId===detail.id)));await loadJournal();setScreen('home');notify('已刪除紀錄');}catch(e){setError(e.message);}}
   async function openFoods(pick=false){setPicking(pick);setQuery('');setError('');try{setFoods((await api('/api/foods')).foods);setScreen('foods');}catch(e){setError(e.message);}}
   function pickFood(f){setDraft(d=>({...d,items:[...d.items,{...f,id:crypto.randomUUID(),foodId:f.id,grams:100,matched:true,cache:false}]}));setScreen('result');}
@@ -241,7 +246,7 @@ export default function App() {
       <header><button onClick={()=>{const n=window.prompt('日誌名稱（顯示為「○○的飲食日誌」）',settings.name||'我');if(n!==null)changeSetting({name:n});}}><b>{settings.name||'我'}的飲食日誌</b></button><button className={'streak'+(streak?'':' off')} onClick={()=>notify(streak?`連續 ${streak} 天有記錄且未超過目標`:'今天記錄且不超標就能開始連勝')} aria-label={'連勝 '+streak+' 天'}><Flame/>{streak}</button><div className="header-actions">{status?.admin&&<button className="text-button" onClick={()=>{setScreen('admin');setError('');}}>管理</button>}<button className="text-button" onClick={()=>{setScreen('history');setError('');}}>飲食紀錄</button><button className="text-button" onClick={()=>{setScreen('settings');setError('');}}>設定</button></div></header>
       <div className="week-strip">{week.map(h=><button key={h.day} disabled={h.day>today()||h.day<since}onClick={()=>chooseDay(h.day,true)} aria-label={h.day+' 的紀錄'}><div className={'week-ring '+(h.day===day?'selected':'')}><i style={{height:Math.min(100,h.kcal/settings.goal*100)+'%',background:h.kcal>settings.goal?'var(--peach)':'var(--purple)'}}/></div><small>{h.day===today()?'今':'日一二三四五六'[new Date(h.day+'T12:00:00').getDay()]}</small></button>)}</div>
       <section className="summary"><div className="total"><strong>{fmt(sum)}</strong><span>kcal {day===today()?'今天':day.slice(5).replace('-','/')}</span></div><div className="progress"><i style={{width:Math.min(100,sum/settings.goal*100)+'%',background:remaining<0?'var(--peach)':'var(--purple)'}}/></div><div className="summary-labels"><span>目標 {fmt(settings.goal)}</span><span>{remaining>=0?'距離目標 '+fmt(remaining):'超過目標 '+fmt(-remaining)}</span></div>{dayNutrients&&meals.length>0&&<NutrientTotals totals={dayNutrients} count={meals.reduce((n,m)=>n+m.items.length,0)} goals={goalsSince&&day>=goalsSince?goals:undefined}/>}</section>
-      <div className="timeline scroll">
+      <div className={'timeline scroll'+(showCandidates({day,today:today(),candidates})?' with-candidates':'')}>
         {!!jobs.length&&<><button className="notice jobs-banner" onClick={()=>setJobsOpen(o=>!o)}>{[['running','筆辨識中'],['done','筆已自動記錄'],['error','筆失敗']].filter(([k])=>jobCount(k)).map(([k,t])=>jobCount(k)+' '+t).join('・')} {jobsOpen?'▴':'▾'}</button>
           {jobsOpen&&<div className="job-list">{jobs.map(j=>{const d=new Date(j.createdAt);return <div className="job-row" key={j.id}><time>{(today(d)===today()?'':today(d).slice(5).replace('-','/')+' ')+d.toTimeString().slice(0,5)}</time><span>{[j.hasPhoto&&'照片',j.text].filter(Boolean).join('・')}</span><small>{{running:j.kind==='relookup'?'查詢中':'辨識中',done:j.kind==='relookup'?'已更新':'已記錄',error:'失敗'}[j.status]}</small>
             {j.status==='error'?<>{j.kind!=='relookup'&&<button className="text-button" onClick={()=>retryJob(j.id)}>重試</button>}<button className="text-button danger" onClick={()=>dropJob(j.id).catch(e=>setError(e.message))}>刪除</button></>:<button className="text-button" onClick={()=>j.status==='done'?showSaved(j):openJob(j.id)}>查看</button>}</div>;})}</div>}</>}
@@ -249,6 +254,7 @@ export default function App() {
         {meals.map(m=><button className="meal-row" key={m.id} onClick={()=>openMeal(m.id)}><time>{m.time}</time><div className="timeline-line"><i/></div><div className="meal-card"><div><b>{m.name}</b><small>{m.items.length} 項 <span className={'source '+(m.items.some(i=>i.source==='llm')?'llm':'web')}>{m.items.some(i=>i.source==='llm')?'含估算':m.items.some(i=>i.source==='web')?'含網路資料':'本機資料'}</span></small></div><strong>{fmt(m.kcal)}</strong></div></button>)}
         {!!meals.length&&<button className="text-button add-manual" onClick={manualDraft}>＋ 手動記一餐</button>}
       </div>
+      {showCandidates({day,today:today(),candidates})&&<div className="candidates" aria-label="常吃、還沒記的餐點">{candidates.map(c=><button key={c.mealId} className="candidate-card" onClick={()=>repeatMeal(c.mealId,c.time)} title={c.items.map(i=>`${i.name} ${fmt(i.grams)}g`).join('、')} aria-label={`記錄 ${c.time} ${c.name} ${fmt(c.kcal)} kcal`}><time>{c.time}</time><small>{fmt(c.kcal)} kcal</small><b>{c.name}</b></button>)}</div>}
       <form className="composer" onSubmit={e=>{e.preventDefault();analyze({text,photo:''});}}><button type="button" className="camera-button" aria-label="開啟相機" onClick={()=>setScreen('camera')}><span/></button><button type="button" className="album-button" onClick={()=>album.current.click()}>相簿</button><input aria-label="餐點描述" value={text} onChange={e=>setText(e.target.value)} placeholder="或輸入：一碗滷肉飯"/><button className="send-button" aria-label="分析文字" disabled={!text.trim()}>↑</button></form>
     </div>}
     {screen==='admin'&&<Admin api={api} onBack={goHome} onError={setError} source={source} sourceDetails={sourceDetails}/>}
@@ -280,7 +286,7 @@ export default function App() {
       </div>}<div ref={threadEnd}/></div></div>}
     {screen==='detail'&&detail&&<div className="screen">{back(detail.day+' · '+detail.time)}<div className="scroll page-pad"><h1>{detail.name}</h1><div className="detail-total">{fmt(detail.kcal)}<small> kcal</small></div><NutrientTotals totals={detail.nutrients||nutrientTotals(detail.items)} count={detail.items.length}/>{detail.photo&&<img className="detail-photo" src={detail.photo} alt={detail.name}/>}
       <div className="card">{detail.items.map((i,k)=><div className="detail-item" key={k}><div><b>{i.name}</b>{source(i)}</div><p>{i.grams}g <strong>{fmt(energy(i))} kcal</strong></p>{sourceDetails(i)}</div>)}</div>
-      <button className="primary full" onClick={()=>{setDraft({...detail,warnings:[],note:''});setPhoto('');setText('');setSteps([]);setScreen('result');}}>編輯這筆紀錄</button><button className="outline full" onClick={repeatMeal}>再記一次</button><button className="outline danger full" onClick={removeMeal}>刪除這筆紀錄</button></div></div>}
+      <button className="primary full" onClick={()=>{setDraft({...detail,warnings:[],note:''});setPhoto('');setText('');setSteps([]);setScreen('result');}}>編輯這筆紀錄</button><button className="outline full" onClick={()=>repeatMeal()}>再記一次</button><button className="outline danger full" onClick={removeMeal}>刪除這筆紀錄</button></div></div>}
     {screen==='history'&&<div className="screen">{back('這一週')}<div className="scroll page-pad"><label>選擇日期<input type="date" value={day} min={since} max={today()} onChange={e=>chooseDay(e.target.value)}/></label><p className="muted">本週平均（含未記錄日）</p><div className="detail-total">{fmt(week.filter(h=>h.day<=today()&&h.day>=since).reduce((s,h,_,a)=>s+h.kcal/a.length,0))}<small> kcal</small></div><p className="muted tiny">未記錄不代表沒有進食。</p>{week.filter(h=>h.day<=today()&&h.day>=since).reverse().map(h=><button className="history-row" key={h.day} onClick={()=>chooseDay(h.day)}><i style={{background:h.kcal>settings.goal?'var(--peach)':'var(--purple)'}}/><span>{h.day.slice(5).replace('-','/')}　週{'日一二三四五六'[new Date(h.day+'T12:00:00').getDay()]}</span><small>{h.count?h.count+' 餐':'未記錄'}</small><strong>{fmt(h.kcal)}</strong></button>)}</div></div>}
     {screen==='settings'&&<div className="screen swipe" {...swipe(dir=>dir>0&&goHome)}>{back('設定')}<div className="scroll page-pad settings-grid">
       <section className="card"><h2>AI 服務</h2>{status?.remote?<p className="muted">{status.user&&<>Tailscale：{status.user}<br/></>}{(status.providersReady??active?.signedIn)?'使用電腦上設定的 AI 服務。':status.providersError||'電腦尚未設定 AI 服務，請在電腦上開啟 127.0.0.1 設定。'}</p>:<>{(providers.length?providers:[{id:'chatgpt',label:'ChatGPT',fallback:true}]).map((p,i)=>{const gpt=p.id==='chatgpt',on=gpt?active?.signedIn:!!p.keyHint;return <div className="provider" key={p.id}><div className="account-row"><label className="radio">{!p.fallback&&<input type="checkbox" checked={p.enabled} onChange={e=>editProvider(p.id,{enabled:e.target.checked})}/>}<span>{p.label} <span className="source">{gpt?(on?'已登入 '+(active.email||active.name||''):'未登入'):(on?'已設定 '+p.keyHint:'未設定')}</span></span></label>{!p.fallback&&<><button className="outline" aria-label={'上移 '+p.label} disabled={!i} onClick={()=>moveProvider(i,-1)}>↑</button><button className="outline" aria-label={'下移 '+p.label} disabled={i===providers.length-1} onClick={()=>moveProvider(i,1)}>↓</button></>}</div>
