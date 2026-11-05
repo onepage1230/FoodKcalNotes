@@ -45,7 +45,7 @@ DRIs 第八版蛋白質章節（書頁 122）只說「以低熱量飲食減重�
 
 **選 1.4 而不是 1.6 的原因**：KDIGO 2024 CKD 指引（Practice Point 3.3.1.1，[官方 PDF](https://kdigo.org/wp-content/uploads/2024/03/KDIGO-2024-CKD-Guideline.pdf)）建議有進展風險的 CKD 成人避免超過 1.3 g/kg/天。1.4 在 ISSN 範圍內，離這條線最近；1.6 的保留肌肉效益也只有間接證據，不值得冒更大的差距。台灣國健署只有定性說法（腎臟病人應諮詢醫師或營養師評估蛋白質攝取量，[國健署頁面](https://www.hpa.gov.tw/Pages/Detail.aspx?nodeid=127&pid=14504)），沒有查到可核實的數字，所以數字提醒只引 KDIGO，國健署只引定性說法。
 
-**調整體重的 0.33**：出自 ESPEN 的臨床指引（ICU 肥胖病人，以及 ESPEN/UEG 2023 肥胖合併肝病表，後者以 BMI 25 對應體重為參考，蛋白質以調整體重計）。這是**僅經搜尋摘要確認、原文未能開啟**的出處，適用情境是臨床而非一般人減重；實作前應找到原文再核對一次。調整體重只用來避免高 BMI 者被算得太高，不用來把下限壓到 RDA 以下。曾考慮「超出部分算一半」，但找不到任何蛋白質處方指引使用 0.5，所以不用。
+**調整體重的 0.33**：已核對原文（2026-11-05）。ESPEN/UEG 肥胖合併胃腸肝病完整版指引（Bischoff 等，United European Gastroenterol J 2022;10(7):663–720，[PMC9486502](https://pmc.ncbi.nlm.nih.gov/articles/PMC9486502/)；2023 年 Clin Nutr 的實用版本以此為本）在 Recommendation 17 的評論寫明：參考體重通常定義為 BMI 25 對應的體重，把超出部分的三分之一加回參考體重，公式 `ABW = reference body weight + (0.33 × (actual body weight − reference body weight))`；隨後的蛋白質建議都以 g/kg ABW 表示，例如 Recommendation 18（活動期 IBD 1.2–1.5 g/kg ABW/d）與 Recommendation 58（NAFLD/NASH 採低熱量飲食減重者 1.2 g/kg ABW/d，以避免肌肉流失）。係數與用於蛋白質處方兩點都與本決定一致。ESPEN ICU 指引（Singer 等，Clin Nutr 2019）的原文仍未能開啟（出版社與 espen.org 皆拒絕連線），未再核對。適用情境仍是臨床而非一般人減重。調整體重只用來避免高 BMI 者被算得太高，不用來把下限壓到 RDA 以下。曾考慮「超出部分算一半」，但找不到任何蛋白質處方指引使用 0.5，所以不用。
 
 ## 考慮過的替代方案
 
