@@ -921,3 +921,69 @@ test('候選餐點：假日顯示最近吃過（含平日、只吃一次），�
   clock.at = new Date(2026, 10, 9, 13, 0); // 週一回到平日規則：只算平日、至少 2 次
   assert.deepEqual((await list()).map(c => [c.name, c.count]), [['週五早餐', 3]]);
 });
+
+// 體重紀錄（weight-tracking ticket 01）：GET /api/weights、PUT/DELETE /api/weights/:day；「今天」由注入的 now 決定（2026-11-05）。
+const weightFixture = (t, extra) => fixture(t, { now: () => new Date(2026, 10, 5, 13, 0), ...extra });
+const putWeight = (f, day, kg, extra) => f.request('/api/weights/' + day, { kg }, { method: 'PUT', ...extra });
+test('體重紀錄：記一筆後可讀回，目前體重取最新日期；同一天再記為覆蓋', async t => {
+  const f = await weightFixture(t);
+  assert.deepEqual(await (await f.request('/api/weights')).json(), { weights: [], current: null });
+  assert.equal((await putWeight(f, '2026-11-03', 70.04)).status, 200);
+  assert.equal((await putWeight(f, '2026-11-05', 69.5)).status, 200);
+  assert.equal((await putWeight(f, '2026-11-05', 69.2)).status, 200); // 覆蓋
+  const body = await (await f.request('/api/weights')).json();
+  assert.deepEqual(body.weights, [{ day: '2026-11-03', kg: 70 }, { day: '2026-11-05', kg: 69.2 }]); // 小數一位、日期遞增
+  assert.deepEqual(body.current, { kg: 69.2, day: '2026-11-05', source: 'record' });
+});
+test('體重紀錄：補記過去日期後目前體重仍是最新一筆；可刪除，刪光後沒有目前體重', async t => {
+  const f = await weightFixture(t);
+  await putWeight(f, '2026-11-05', 69.2);
+  await putWeight(f, '2026-10-01', 72); // 補記更早的日子
+  assert.equal((await (await f.request('/api/weights')).json()).current.day, '2026-11-05');
+  await putWeight(f, '2026-10-01', 71.5); // 修改
+  assert.deepEqual((await (await f.request('/api/weights')).json()).weights[0], { day: '2026-10-01', kg: 71.5 });
+  assert.equal((await f.request('/api/weights/2026-11-05', null, { method: 'DELETE' })).status, 200);
+  assert.deepEqual((await (await f.request('/api/weights')).json()).current, { kg: 71.5, day: '2026-10-01', source: 'record' });
+  await f.request('/api/weights/2026-10-01', null, { method: 'DELETE' });
+  assert.deepEqual(await (await f.request('/api/weights')).json(), { weights: [], current: null });
+});
+test('體重紀錄：拒絕未來日期、不合理的體重與壞日期，並回繁體中文錯誤；不留下紀錄', async t => {
+  const f = await weightFixture(t);
+  let res = await putWeight(f, '2026-11-06', 70); assert.equal(res.status, 400); assert.equal((await res.json()).error, '不能記錄未來的日期。');
+  for (const kg of [24.9, 300.1, '70', null, NaN, undefined]) { res = await putWeight(f, '2026-11-05', kg); assert.equal(res.status, 400, String(kg)); assert.match((await res.json()).error, /25–300 公斤/); }
+  assert.equal((await putWeight(f, '2026-02-30', 70)).status, 400);
+  assert.equal((await putWeight(f, 'abc', 70)).status, 400);
+  assert.equal((await putWeight(f, '2026-11-05', 25)).status, 200); // 邊界值可記
+  assert.equal((await putWeight(f, '2026-11-04', 300)).status, 200);
+  assert.deepEqual((await (await f.request('/api/weights')).json()).weights.map(w => w.day), ['2026-11-04', '2026-11-05']);
+});
+test('體重紀錄：沒有紀錄時目前體重是計劃裡的體重；有紀錄後改用紀錄；沒有計劃也能記', async t => {
+  const f = await weightFixture(t);
+  assert.equal((await (await f.request('/api/weights')).json()).current, null);
+  await f.request('/api/settings', { plan: { sex: 'f', age: 28, height: 165, weight: 60, target: 55, activity: 1.2 } });
+  assert.deepEqual((await (await f.request('/api/weights')).json()).current, { kg: 60, day: null, source: 'plan' });
+  await putWeight(f, '2026-11-05', 58.8);
+  assert.deepEqual((await (await f.request('/api/weights')).json()).current, { kg: 58.8, day: '2026-11-05', source: 'record' });
+  const g = await weightFixture(t); // 沒有計劃的日誌
+  assert.equal((await putWeight(g, '2026-11-05', 80)).status, 200);
+});
+test('體重紀錄：記錄、刪除不改動減重計劃、每日熱量目標與連勝；匯出備份包含體重紀錄', async t => {
+  const f = await weightFixture(t);
+  const plan = { sex: 'f', age: 28, height: 165, weight: 60, target: 55, activity: 1.2, startDate: '2026-10-01' };
+  const before = await (await f.request('/api/settings', { goal: 1500, plan })).json();
+  await putWeight(f, '2026-11-05', 58.8); await putWeight(f, '2026-11-01', 59.5); await f.request('/api/weights/2026-11-01', null, { method: 'DELETE' });
+  const settings = (await (await f.request('/api/journal?day=2026-11-05&today=2026-11-05')).json()).settings;
+  assert.equal(settings.goal, 1500); assert.deepEqual(settings.plan, before.plan);
+  const exported = await (await f.request('/api/export')).json();
+  assert.deepEqual(exported.weights, [{ day: '2026-11-05', kg: 58.8 }]);
+});
+test('體重紀錄：朋友日誌各自一份，與主日誌互不可見', async t => {
+  const f = await weightFixture(t, { chatgptShared: true });
+  const friend = friendHeaders('friend@example.com');
+  await putWeight(f, '2026-11-05', 70);
+  await putWeight(f, '2026-11-04', 55, friend);
+  assert.deepEqual((await (await f.request('/api/weights')).json()).weights, [{ day: '2026-11-05', kg: 70 }]);
+  assert.deepEqual((await (await f.request('/api/weights', null, friend)).json()).weights, [{ day: '2026-11-04', kg: 55 }]);
+  await f.request('/api/weights/2026-11-05', null, { method: 'DELETE', ...friend }); // 朋友刪同一天不影響主日誌
+  assert.equal((await (await f.request('/api/weights')).json()).weights.length, 1);
+});

@@ -141,6 +141,7 @@ export function createJournal(filename, { foods: shared = null } = {}) {
     CREATE TABLE IF NOT EXISTS foods (id TEXT PRIMARY KEY, name TEXT NOT NULL, normalized TEXT NOT NULL UNIQUE, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS meals (id TEXT PRIMARY KEY, day TEXT NOT NULL, time TEXT NOT NULL, name TEXT NOT NULL, items TEXT NOT NULL, photo TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS meals_day ON meals(day);
+    CREATE TABLE IF NOT EXISTS weights (day TEXT PRIMARY KEY, kg REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, status TEXT NOT NULL, created_at TEXT NOT NULL, text TEXT NOT NULL, photo TEXT NOT NULL,
@@ -235,6 +236,23 @@ export function createJournal(filename, { foods: shared = null } = {}) {
     for (const [key, value] of Object.entries(next)) db.prepare('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, JSON.stringify(value));
     return next;
   }
+  // 體重紀錄（spec weight-tracking）：每天最多一筆，同一天再記即覆蓋；公斤保存到小數一位。「不得晚於今天」由路由以注入的時鐘檢查。
+  const weights = () => db.prepare('SELECT day,kg FROM weights ORDER BY day').all().map(r => ({ day: r.day, kg: r.kg }));
+  function setWeight(day, kg) {
+    if (!validDate(day)) throw bad('日期格式不正確。');
+    if (typeof kg !== 'number' || !Number.isFinite(kg) || kg < 25 || kg > 300) throw bad('體重不正確，請輸入 25–300 公斤。');
+    const value = Math.round(kg * 10) / 10;
+    db.prepare('INSERT INTO weights VALUES(?,?) ON CONFLICT(day) DO UPDATE SET kg=excluded.kg').run(day, value);
+    return { day, kg: value };
+  }
+  const deleteWeight = day => db.prepare('DELETE FROM weights WHERE day=?').run(day).changes;
+  // 目前體重：最新一筆紀錄；沒有紀錄時用計劃裡的體重；都沒有為 null。
+  function currentWeight() {
+    const latest = db.prepare('SELECT day,kg FROM weights ORDER BY day DESC LIMIT 1').get();
+    if (latest) return { kg: latest.kg, day: latest.day, source: 'record' };
+    const planned = preferences().plan?.weight;
+    return typeof planned === 'number' ? { kg: planned, day: null, source: 'plan' } : null;
+  }
   function readMeal(row, withPhoto = true) {
     const items = JSON.parse(row.items);
     return { id: row.id, day: row.day, time: row.time, name: row.name, items, kcal: items.reduce((s, i) => s + kcal(i), 0), nutrients: nutrientTotals(items),
@@ -326,9 +344,9 @@ export function createJournal(filename, { foods: shared = null } = {}) {
   };
   function getJob(id) { const row = db.prepare('SELECT * FROM jobs WHERE id=?').get(id); return row ? readJob(row, true) : null; }
   const deleteJob = id => db.prepare('DELETE FROM jobs WHERE id=?').run(id).changes;
-  return { close: () => db.close(), getMeta, setMeta, stats, recentMeals, ...library, preferences, updatePreferences, meals, mealsSince, dayNutrients, meal, saveMeal, week, streak,
+  return { close: () => db.close(), getMeta, setMeta, stats, recentMeals, ...library, preferences, updatePreferences, weights, setWeight, deleteWeight, currentWeight, meals, mealsSince, dayNutrients, meal, saveMeal, week, streak,
     createJob, updateJob, listJobs, getJob, deleteJob,
     deleteMeal: id => { db.prepare("DELETE FROM jobs WHERE status='done' AND meal_id=?").run(id); return db.prepare('DELETE FROM meals WHERE id=?').run(id).changes; },
-    exportData: () => ({ version: 1, settings: preferences(), foods: library.foods(), meals: db.prepare('SELECT * FROM meals ORDER BY day,time').all().map(row => readMeal(row)) }),
+    exportData: () => ({ version: 1, settings: preferences(), weights: weights(), foods: library.foods(), meals: db.prepare('SELECT * FROM meals ORDER BY day,time').all().map(row => readMeal(row)) }),
   };
 }
