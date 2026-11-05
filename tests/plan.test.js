@@ -29,6 +29,14 @@ test('planGoal：有 startDate 時從開始日倒數，過了預計日為 0', ()
   const none = planGoal(sample, 1300, new Date(2026, 9, 10));
   assert.equal(none.days, 130); assert.equal(none.total, 130); assert.equal(none.date, '2027-02-17');
 });
+test('planGoal：BMR、TDEE、最低攝取與每週預計減重量用目前體重；預計達成日不在本 ticket 變動', () => {
+  const plan = { sex: 'f', age: 28, height: 165, weight: 90, target: 60, activity: 1.2, startDate: '2026-10-01' };
+  const now = new Date(2026, 10, 5);
+  // 起始體重 90：BMR 1630、TDEE 1956、每週 0.41 公斤 → 513 天，2028-02-26
+  assert.deepEqual(planGoal(plan, 1500, now, 90), { bmr: 1630, tdee: 1956, floor: 1630, weekly: 0.41, days: 478, date: '2028-02-26', total: 513 });
+  // 目前體重 80：BMR 10×80 + 6.25×165 − 5×28 − 161 = 1530、TDEE 1836、每週 (1836.3 − 1500) × 7 ÷ 7700 = 0.31
+  assert.deepEqual(planGoal(plan, 1500, now, 80), { bmr: 1530, tdee: 1836, floor: 1530, weekly: 0.31, days: 478, date: '2028-02-26', total: 513 });
+});
 test('偏好 plan：預設 null、驗證、保存與清除', () => {
   const db = createJournal(':memory:'); assert.equal(db.preferences().plan, null);
   db.updatePreferences({ plan: sample }); assert.deepEqual(db.preferences().plan, sample);

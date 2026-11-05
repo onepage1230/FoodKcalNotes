@@ -15,13 +15,39 @@ export const NUTRIENT_GOALS = [
     basis: '每日少於 2,300 mg（約 6 g 鹽）', source: '國健署 DRIs 第八版 鈉 CDRR' },
 ];
 
+// 赤字期蛋白質的說明（ADR 0012）：1.4 只有間接出處，如實寫明；附腎功能提醒。
+const DEFICIT_PROTEIN = {
+  basis: '減重期每公斤基準體重 1.4 g，且不低於 1.1 g（71 歲以上 1.2 g）× 起始與目前較大的體重；基準體重取起始與目前較大者，超過 BMI 25 對應體重的部分只計入三分之一',
+  source: '間接依據：ISSN 立場聲明 1.4–2.0 g/kg 範圍下緣；調整體重依 ESPEN/UEG 指引；下限依國健署 DRIs 第八版 RDA',
+  note: '腎功能不佳者請先諮詢醫師或營養師',
+};
+// 目標說明文字：赤字期的蛋白質換成 ADR 0012 的說明，其餘照 NUTRIENT_GOALS。
+export function goalInfo(total, plan, current) {
+  const { basis, source, note } = NUTRIENT_GOALS.find(g => g.total === total);
+  if (total === 'protein' && inDeficit(plan, current)) return DEFICIT_PROTEIN;
+  return { basis, source, ...(note ? { note } : {}) };
+}
+
 const kcalShare = (kcal, pct, perGram) => Number.isFinite(kcal) && kcal > 0 ? Math.round(kcal * pct / perGram) : null;
 
-// plan 可為 null（沒有計劃）：依賴體重的蛋白質為 null，其餘只看每日熱量目標 kcal。
-export function suggestedGoals(plan, kcal) {
+// 減重計劃進行中（ADR 0012）：有計劃且目前體重 > 目標體重。
+const inDeficit = (plan, current) => Number.isFinite(plan?.weight) && plan.weight > 0 && Number.isFinite(current) && current > plan.target;
+
+// 蛋白質下限（ADR 0010、0012）。plan.weight 是起始體重，current 是目前體重。
+function proteinMin(plan, current) {
   const weight = Number.isFinite(plan?.weight) && plan.weight > 0 ? plan.weight : null;
+  if (!weight || !(Number.isFinite(current) && current > 0)) return null;
+  const rda = plan.age >= 71 ? 1.2 : 1.1;
+  if (!inDeficit(plan, current)) return Math.round(current * rda);
+  const actual = Math.max(weight, current), ref = 25 * (plan.height / 100) ** 2;
+  const base = actual <= ref ? actual : ref + 0.33 * (actual - ref);
+  return Math.round(Math.max(1.4 * base, rda * actual));
+}
+
+// plan 可為 null（沒有計劃）：依賴體重的蛋白質為 null，其餘只看每日熱量目標 kcal。current：伺服器提供的目前體重（公斤）。
+export function suggestedGoals(plan, kcal, current) {
   return {
-    protein: { type: 'min', min: weight && Math.round(weight * (plan.age >= 71 ? 1.2 : 1.1)) },
+    protein: { type: 'min', min: proteinMin(plan, current) },
     fat: { type: 'range', min: kcalShare(kcal, 0.2, 9), max: kcalShare(kcal, 0.3, 9) },
     carbs: { type: 'range', min: kcalShare(kcal, 0.5, 4), max: kcalShare(kcal, 0.65, 4) },
     sugar: { type: 'max', max: kcalShare(kcal, 0.1, 4) },
@@ -43,8 +69,8 @@ export function goalStatus(total, goal) {
 export const GOAL_STATUS_TEXT = { ok: '達標', low: '不足', maybeLow: '可能不足', outOfRange: '超出範圍', over: '超標', unknown: '' };
 
 // 實際目標 = 覆寫值 ?? 建議值；覆寫以整項為單位（範圍型 min、max 一起覆寫）。
-export function nutrientGoals(plan, kcal, overrides = {}) {
-  const suggested = suggestedGoals(plan, kcal);
+export function nutrientGoals(plan, kcal, current, overrides = {}) {
+  const suggested = suggestedGoals(plan, kcal, current);
   return Object.fromEntries(NUTRIENT_GOALS.map(({ total }) => {
     const { type, ...values } = suggested[total]; const own = overrides?.[total];
     return [total, { type, ...(own || values), overridden: !!own, suggested: values }];

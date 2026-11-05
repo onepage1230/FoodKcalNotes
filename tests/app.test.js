@@ -1001,3 +1001,17 @@ test('體重紀錄：朋友日誌各自一份，與主日誌互不可見', async
   await f.request('/api/weights/2026-11-05', null, { method: 'DELETE', ...friend }); // 朋友刪同一天不影響主日誌
   assert.equal((await (await f.request('/api/weights')).json()).weights.length, 1);
 });
+
+// 目前體重進入計劃計算（weight-tracking ticket 02）：日誌 API 一併回傳體重狀態，前端不另外推導目前體重。
+test('日誌 API 回傳體重狀態：沒有紀錄時目前體重是計劃體重，記錄後改為最新紀錄；每日熱量目標與計劃不變', async t => {
+  const f = await weightFixture(t);
+  const journal = async () => (await (await f.request('/api/journal?day=2026-11-05&today=2026-11-05')).json());
+  assert.deepEqual((await journal()).weight, { weights: [], current: null });
+  const plan = { sex: 'f', age: 28, height: 165, weight: 90, target: 60, activity: 1.2, startDate: '2026-10-01' };
+  await f.request('/api/settings', { goal: 1500, plan });
+  assert.deepEqual((await journal()).weight.current, { kg: 90, day: null, source: 'plan' });
+  await putWeight(f, '2026-11-05', 80);
+  const after = await journal();
+  assert.deepEqual(after.weight, { weights: [{ day: '2026-11-05', kg: 80 }], current: { kg: 80, day: '2026-11-05', source: 'record' } });
+  assert.equal(after.settings.goal, 1500); assert.deepEqual(after.settings.plan, plan);
+});
