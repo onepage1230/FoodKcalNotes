@@ -244,10 +244,11 @@ export function createJournal(filename, { foods: shared = null } = {}) {
     if (!validDate(day)) throw bad('日期格式不正確。');
     return db.prepare('SELECT * FROM meals WHERE day=? ORDER BY time DESC,created_at DESC').all(day).map(row => readMeal(row, false));
   }
-  // 候選餐點用：from（含）之後的所有餐點，新到舊；不讀照片內容（photo 欄只取是否有照片），避免載入大量 base64。
+  // 候選餐點用：from（含）之後的所有餐點，新到舊；只取候選歸納需要的 id、day、time、name、items（不讀照片、不算總量）。
   function mealsSince(from) {
     if (!validDate(from)) throw bad('日期格式不正確。');
-    return db.prepare("SELECT id,day,time,name,items,photo<>'' AS photo FROM meals WHERE day>=? ORDER BY day DESC,time DESC,created_at DESC").all(from).map(row => readMeal(row, false));
+    return db.prepare('SELECT id,day,time,name,items FROM meals WHERE day>=? ORDER BY day DESC,time DESC,created_at DESC').all(from)
+      .map(({ id, day, time, name, items }) => ({ id, day, time, name, items: JSON.parse(items) }));
   }
   // 當日營養素：所有餐點的所有項目一起算，未知數是項目數（與 nutrientTotals 一致）。
   function dayNutrients(day) { return nutrientTotals(meals(day).flatMap(m => m.items)); }
