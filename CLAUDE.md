@@ -29,6 +29,7 @@ docker-compose up -d --build               # 見 README「Docker／群暉 NAS �
 - `server/app.js`：`createApp(...)` 以依賴注入接收 `store`、`oauth`、`fetcher`、`anthropicFactory`、`journalFor` 等，測試靠替換這些物件來模擬，不打真實網路。這裡負責安全層（session、CSRF、本機／遠端判斷）、ChatGPT OAuth、AI 服務順序與備援（`providerChain`）。
 - `server/food-routes.js`：日誌 API 與背景工作（`/api/analyze` 建立 job → 背景執行 → 自動存成餐點）；`fallbackWorthy` 決定哪些錯誤換下一個 AI 服務，`retryOnTimeout` 逾時重試一次。
 - `server/food-analysis.js`：辨識與查熱量流程。`analyzeMeal`：一次辨識呼叫（JSON Schema 結構化輸出）→ 包裝營養標示 → 本機食物庫 → 未命中項目最多 3 個並行 `lookupItem`（網路搜尋，引用網址必須出現在工具的 citation 中才算 `web`；否則 LLM 估算）。
+- `server/repeat-candidates.js`：候選餐點歸納的純函式（不碰資料庫與時鐘）；`food-routes.js` 的 `GET /api/repeat-candidates` 與 `POST /api/meals/:id/repeat` 使用它。
 - `server/journal.js`：`node:sqlite` 資料層（餐點、照片、設定、jobs、食物庫）。`EXCLUSIVE` 互斥詞規則與 `conflicts()` 擋下炸≠蒸、無糖≠含糖等，模型無法推翻。
 - `server/claude.js`：Claude API 的 `infer` 實作，與 ChatGPT（Responses API + SSE，`sse.js`）對外介面一致，所以分析流程不知道是哪個服務在處理。
 - `server/storage.js`：`credentials.json`。Windows 用 DPAPI 保護的 AES-256-GCM，其他平台明文 0600，並會對資料夾 `chmod 0700`（資料夾擁有者不對時啟動即失敗）。
@@ -48,6 +49,7 @@ docker-compose up -d --build               # 見 README「Docker／群暉 NAS �
 - 食物庫快取：未經修改的 `web` 與 `label` 結果保存時寫入，同名不覆蓋；背景自動存檔的 `llm` 估算與使用者改過的項目不寫入；朋友日誌預設不寫入。
 - 營養素（蛋白質、脂肪、碳水、糖、鈉，每 100g）：`null` 是未知，不等於 0；總計回傳已知總量與未知數（顯示「至少」）。補估呼叫只填營養素、不改熱量，補的欄位列入 `estimated`（畫面標「估」）。`web` 的營養素只取與熱量同一個被引用的來源；引用驗證失敗降級為 `llm` 時，回應中的營養素全部捨棄。
 - 營養素的食物庫快取例外（`journal.js` 的 `mergeNutrients`）：庫裡 `null` 的欄位可被補上；`estimated` 的欄位只能被有出處（非命中的 `web`／`label`）的值覆蓋；有出處的永不覆蓋；熱量、名稱、來源不動。使用者改過營養素的項目（`nutrientsEdited`）與預設的朋友日誌不寫入。連勝只看熱量，不看營養素。
+- 重複記錄（ADR 0011）：候選餐點每次由既有紀錄即時歸納，不儲存、不新增欄位（餐點仍沒有餐別）。「再記一次」與點候選一律 `shareFoods:false`：不寫食物庫、不補營養素、不複製照片，與 `FRIENDS_CACHE` 無關。
 - 日期、時間、用餐時段（`mealTimeContext`）、連勝的「今天」都用**伺服器本地時間**，容器內必須設 `TZ`。
 
 ## 慣例
