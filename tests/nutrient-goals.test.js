@@ -101,7 +101,7 @@ test('目標說明：赤字期蛋白質說明算法、間接出處與腎功能�
 test('偏好 nutrientGoals：舊設定沒有此欄位時預設為空物件', () => {
   const db = createJournal(':memory:');
   assert.deepEqual(db.preferences().nutrientGoals, {});
-  db.updatePreferences({ goal: 1500, plan }); assert.deepEqual(db.preferences().nutrientGoals, {}); db.close();
+  db.updatePreferences({ goal: 1500, plan }, { today: '2026-10-03' }); assert.deepEqual(db.preferences().nutrientGoals, {}); db.close();
 });
 test('偏好 nutrientGoals：逐項覆寫、合併保存，null 清除單項或全部', () => {
   const db = createJournal(':memory:');

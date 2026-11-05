@@ -88,17 +88,19 @@ export function validateItems(items) {
 // today：伺服器本地今天（路由以注入的 now 傳入）。開始日由前端的「今天」決定，裝置時區比伺服器快時可能晚一兩天：
 // 這種情況以伺服器今天為準（重新開始計劃不會 400）；更晚的日期仍拒絕。
 const START_SLACK_DAYS = 2;
+// 每日熱量目標與起點每日目標共用的範圍（kcal）。
+const GOAL_MIN = 500, GOAL_MAX = 10000;
 function validPlan(p, today) {
   const num = (v, lo, hi) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
   if (!p || !['f', 'm'].includes(p.sex) || !Number.isInteger(p.age) || !num(p.age, 10, 100) || !num(p.height, 100, 230)
     || !num(p.weight, WEIGHT_MIN, WEIGHT_MAX) || !num(p.target, WEIGHT_MIN, WEIGHT_MAX) || ![1.2, 1.375, 1.55, 1.725].includes(p.activity))
     throw bad('減重目標資料不正確，請檢查性別、年齡、身高、體重、目標與活動量。');
-  if (!today) { const now = new Date(); today = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10); }
+  if (!validDate(today)) throw new TypeError('updatePreferences：儲存計劃需要 today（YYYY-MM-DD，伺服器本地今天）');
   const latest = new Date(Date.parse(today) + START_SLACK_DAYS * 864e5).toISOString().slice(0, 10);
   if (p.startDate !== undefined && (!validDate(p.startDate) || p.startDate > latest)) throw bad('計劃開始日期不正確。');
   const startDate = p.startDate && (p.startDate > today ? today : p.startDate);
   // startGoal：起點設定當下的每日熱量目標（GLOSSARY：起點每日目標），範圍同每日目標；舊計劃沒有此欄位。
-  if (p.startGoal !== undefined && !(Number.isInteger(p.startGoal) && p.startGoal >= 500 && p.startGoal <= 10000)) throw bad('起點每日目標不正確，需為 500～10000 kcal 的整數。');
+  if (p.startGoal !== undefined && !(Number.isInteger(p.startGoal) && p.startGoal >= GOAL_MIN && p.startGoal <= GOAL_MAX)) throw bad(`起點每日目標不正確，需為 ${GOAL_MIN}～${GOAL_MAX} kcal 的整數。`);
   return { sex: p.sex, age: p.age, height: p.height, weight: p.weight, target: p.target, activity: p.activity, ...(startDate && { startDate }), ...(p.startGoal !== undefined && { startGoal: p.startGoal }) };
 }
 // 營養目標覆寫：patch 合併到既有覆寫，單項 null 清除；欄位依類型（下限 min、上限 max、範圍兩者且 min ≤ max）。
@@ -227,10 +229,10 @@ export function createJournal(filename, { foods: shared = null } = {}) {
     const values = Object.fromEntries(db.prepare('SELECT key,value FROM settings').all().map(r => [r.key, JSON.parse(r.value)]));
     return { goal: 1800, fallback: 'web', model: '', name: '我', plan: null, nutrientGoals: {}, ...values };
   }
-  function updatePreferences(input, { today } = {}) {
+  function updatePreferences(input, { today } = {}) { // today：伺服器本地今天，只有儲存計劃時需要（路由以注入的時鐘傳入）
     const next = preferences();
     if ('goal' in input) {
-      if (!Number.isInteger(input.goal) || input.goal < 500 || input.goal > 10000) throw bad('每日目標需為 500～10000 kcal。');
+      if (!Number.isInteger(input.goal) || input.goal < GOAL_MIN || input.goal > GOAL_MAX) throw bad(`每日目標需為 ${GOAL_MIN}～${GOAL_MAX} kcal。`);
       next.goal = input.goal;
     }
     if ('fallback' in input) {

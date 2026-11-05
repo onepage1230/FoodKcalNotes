@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Admin from './Admin.jsx';
-import { planProgress, planToSave, restartPlan } from './plan.js';
+import { planProgress, planToSave, restartPlan, effectiveStartGoal, planSummary, planPreviewText, planSaveNote } from './plan.js';
 import { planContext } from './plan-context.js';
 import { latest } from './latest.js';
 import { WEIGHT_MIN, WEIGHT_MAX } from './weight.js';
@@ -10,6 +10,7 @@ import { NUTRIENTS, nutrientValue, nutrientTotals, kcalMismatch } from './nutrie
 import { showCandidates } from './candidate-view.js';
 
 const fmt = n => Math.round(n).toLocaleString('en-US');
+const restartConfirmText = (kg, goal) => `以目前體重 ${kg} 公斤、今天與每日目標 ${fmt(goal)} kcal 為新起點重新開始？原本的起始體重、開始日與預計達成日會被取代。`;
 const energy = i => Math.round(i.grams * i.kcalPer100g / 100);
 const total = items => items.reduce((sum, i) => sum + energy(i), 0);
 // 營養目標：類型與顯示文字（下限 ≥、範圍 a～b、上限 ≤）；null 表示缺資料無法計算。
@@ -232,19 +233,24 @@ export default function App() {
   async function changeSetting(patch,message='設定已保存'){try{const next=await api('/api/settings',patch);setSettings(next);if('plan' in patch){const wn=weightSeq.begin();api('/api/weights').then(d=>weightSeq.isCurrent(wn)&&setWeightData(d),e=>weightSeq.isCurrent(wn)&&setError(e.message));}setGoalInput(String(next.goal));notify(message);return next;}catch(e){setError(e.message);}}
   // 減重目標：未編輯前顯示已存的 plan；表單保留輸入字串，全部是有效數字時才估算。
   // 已存 plan 且未編輯時顯示倒數摘要；startDate 讓剩餘天數從開始日倒數，不進表單。
-  const {startDate:planStart,startGoal:planStartGoal,rate:_rate,...savedPlan}=settings.plan||{}; // rate：舊版每週速度欄位，已不使用；起點（開始日、起點每日目標）不進表單
-  const startGoal=planStartGoal??settings.goal; // 原計劃用的每日目標；舊計劃沒有時退回目前每日目標
+  const {startDate:_start,startGoal:_startGoal,rate:_rate,...savedPlan}=settings.plan||{}; // rate：舊版每週速度欄位，已不使用；起點（開始日、起點每日目標）不進表單
   const currentKg=weightData?.current?.kg; // 目前體重：最新紀錄，沒有紀錄時是計劃體重（伺服器決定）
   const recordDay=weightData?.current?.source==='record'?weightData.current.day:null, recordKg=recordDay?currentKg:null; // 最新體重紀錄；沒有紀錄為 null
   // 有紀錄時表單的「目前體重」固定是最新紀錄（唯讀）；儲存時 planToSave 決定真正的起始體重與開始日。
   const planInput=planForm?{...planForm,...(recordKg!=null&&{weight:String(recordKg)})}:Object.fromEntries(Object.entries({sex:'f',activity:1.2,age:'',height:'',weight:'',target:'',...savedPlan,...(recordKg!=null&&{weight:recordKg})}).map(([k,v])=>[k,String(v)]));
   const savedCtx=planContext(settings.plan,currentKg); // 已存計劃＋目前體重（載入前 currentKg 是 undefined，退回計劃體重）；計劃卡片與營養目標共用
   const saved=!planForm&&settings.plan&&planProgress(savedCtx,settings.goal,recordDay);
+  const card=saved&&planSummary({progress:saved,ctx:savedCtx,goal:settings.goal,recordDay}); // 計劃卡片的狀態與文案
   const editPlan=patch=>setPlanForm({...planInput,...patch});
   const planNums=Object.fromEntries(Object.entries(planInput).map(([k,v])=>[k,k==='sex'?v:Number(v)]));
-  const planSave=planToSave(settings.plan,planNums,recordKg,today(),settings.goal); // 要存的計劃：起始體重與開始日只有沒有紀錄且改了體重時才重設
-  const plan=Object.values(planNums).every(v=>typeof v==='string'||v>0)?planProgress(planContext(planSave,recordKg),settings.goal,recordDay):null;
-  const restart=()=>{const kg=savedCtx.current;if(window.confirm(`以目前體重 ${kg} 公斤、今天與目前每日目標 ${fmt(settings.goal)} kcal 為新的起點重新開始計劃？原本的起始體重、開始日與預計達成日會被取代。`))changeSetting({plan:restartPlan(savedPlan,kg,today(),settings.goal)},'已重新開始計劃');};
+  const planSave=planToSave({saved:settings.plan,form:planNums,recordKg,today:today(),goal:settings.goal}); // 要存的計劃：起始體重與開始日只有沒有紀錄且改了體重時才重設
+  const planCtx=planContext(planSave,recordKg);
+  const plan=Object.values(planNums).every(v=>typeof v==='string'||v>0)?planProgress(planCtx,settings.goal,recordDay):null;
+  const restart=()=>{
+    const kg=savedCtx.current;
+    if(!window.confirm(restartConfirmText(kg,settings.goal)))return;
+    changeSetting({plan:restartPlan({saved:savedPlan,currentKg:kg,today:today(),goal:settings.goal})},'已重新開始計劃');
+  };
   const bodyOk=Number.isInteger(planNums.age)&&[['age',10,100],['height',100,230],['weight',WEIGHT_MIN,WEIGHT_MAX],['target',WEIGHT_MIN,WEIGHT_MAX]].every(([k,lo,hi])=>planNums[k]>=lo&&planNums[k]<=hi); // 同 server validPlan 範圍
   // 營養目標：建議值依已存計劃與每日熱量目標即時計算；goalEdit 是正在覆寫的項目（輸入字串）。
   const goals=nutrientGoals(savedCtx,settings.goal,settings.nutrientGoals||{});
@@ -319,25 +325,23 @@ export default function App() {
       <WeightCard api={api} notify={notify} onError={setError} today={today} data={weightData} onChange={d=>{weightSeq.begin();setWeightData(d);}}/>
       <section className="card">{saved?<><h2>減重計劃</h2>
         {/* 倒數、預計達成日與計劃線屬於「原計劃」（起始體重、開始日、起點每日目標，固定）；TDEE、每週減重量、「不會再減重」與最低攝取是「依目前體重與目前每日目標」的即時資訊，兩者分開寫明。達成後不顯示倒數。 */}
-        <div className="detail-total">{saved.reached?'已達成目標':saved.days===0?(saved.total?'已到預計日期，請更新體重':'—'):saved.days===null?'—':saved.days}{!saved.reached&&saved.days>0&&<small> 天</small>}</div>
-        {saved.reached?<p>目前體重 {savedCtx.current} 公斤，已達到目標 {settings.plan.target} 公斤</p>:saved.total>0&&<><p>原計劃預計 {saved.date.replace(/-/g,'.')} 達成 · {saved.pct}% 已完成</p><div className="progress"><i style={{width:saved.pct+'%',background:'var(--purple)'}}/></div></>}
-        {!saved.reached&&saved.diff!==null&&<p>{saved.diff>0?`實際比計劃線高 ${saved.diff.toFixed(1)} 公斤`:saved.diff<0?`實際比計劃線低 ${(-saved.diff).toFixed(1)} 公斤`:'實際與計劃線相同'}<small className="muted">（{recordDay.replace(/-/g,'.')} 計劃線 {saved.line} 公斤）</small></p>}
-        {!saved.reached&&saved.days===null&&<p>原計劃（每日 {fmt(startGoal)} kcal）依起始體重推算不會減重，可按「重新開始計劃」</p>}
-        {!saved.reached&&saved.days===0&&!saved.total&&<p className="muted">起始體重已不高於目標，可按「重新開始計劃」以目前體重為新起點。</p>}
-        {!saved.reached&&saved.total>0&&saved.weekly===0&&<p className="notice">依目前體重 {savedCtx.current} 公斤與目前每日目標 {fmt(settings.goal)} kcal 不會再減重；上方預計達成日是原計劃，不代表照目前設定能達成</p>}
-        {!saved.reached&&settings.goal<saved.floor&&<p className="notice">每日目標低於建議最低攝取 {fmt(saved.floor)} kcal，長期可能流失肌肉、代謝下降</p>}
-        <p className="muted tiny">依目前設定（體重 {savedCtx.current} 公斤）：基礎代謝 {fmt(saved.bmr)}、每日消耗約 {fmt(saved.tdee)} kcal{saved.reached?'（維持體重約需此熱量）':saved.weekly>0?`，以目前每日目標 ${fmt(settings.goal)} kcal 每週約減 ${saved.weekly} 公斤`:''}</p>
-        <p className="muted tiny">原計劃：起始 {settings.plan.weight} 公斤{planStart&&`（${planStart.replace(/-/g,'.')} 開始）`} → 目標 {settings.plan.target} 公斤 · 每日 {fmt(startGoal)} kcal{planStartGoal===undefined&&'（舊計劃：隨目前每日目標）'}</p><button className="outline full" onClick={()=>{setPlanForm(planInput);setPlanStep(1);}}>編輯計劃</button><button className="text-button full" onClick={restart}>重新開始計劃</button></>:<><h2>減重目標</h2>{planStep===1&&<><small className="muted">生理性別</small>{[['f','女'],['m','男']].map(([v,label])=><label className="radio" key={v}><input type="radio" name="sex" checked={planInput.sex===v} onChange={()=>editPlan({sex:v})}/>{label}</label>)}
+        <div className="detail-total">{card.headline}{card.showDays&&<small> 天</small>}</div>
+        {card.summary&&<p>{card.summary}</p>}
+        {card.pct!==null&&<div className="progress"><i style={{width:card.pct+'%',background:'var(--purple)'}}/></div>}
+        {card.diff&&<p>{card.diff.text}<small className="muted">{card.diff.note}</small></p>}
+        {card.notes.map(n=><p key={n.text} className={n.tone==='plain'?undefined:n.tone==='muted'?'muted':'notice'}>{n.text}</p>)}
+        <p className="muted tiny">{card.basis}</p>
+        <p className="muted tiny">{card.original}</p><button className="outline full" onClick={()=>{setPlanForm(planInput);setPlanStep(1);}}>編輯計劃</button><button className="text-button full" onClick={restart}>重新開始計劃</button></>:<><h2>減重目標</h2>{planStep===1&&<><small className="muted">生理性別</small>{[['f','女'],['m','男']].map(([v,label])=><label className="radio" key={v}><input type="radio" name="sex" checked={planInput.sex===v} onChange={()=>editPlan({sex:v})}/>{label}</label>)}
         <div className="two-columns">{[['age','年齡'],['height','身高 cm'],['weight','目前體重 kg'],['target','目標體重 kg']].map(([k,label])=><label key={k}>{label}<input type="text" inputMode={k==='age'?'numeric':'decimal'} value={planInput[k]} readOnly={k==='weight'&&recordKg!=null} onChange={e=>editPlan({[k]:e.target.value})}/></label>)}</div>
-        {recordKg!=null&&<p className="muted tiny">目前體重取最新的體重紀錄；要改體重請到「體重」卡片記錄。{settings.plan&&'儲存計劃不會改變起始體重、開始日與起點每日目標。'}</p>}
+        {recordKg!=null&&<p className="muted tiny">目前體重取最新的體重紀錄；要改體重請到「體重」卡片記錄。{settings.plan?.startDate&&'儲存計劃不會改變起始體重、開始日與起點每日目標。'}</p>}
         <button className="primary full" disabled={!bodyOk} onClick={()=>setPlanStep(2)}>下一步</button></>}
         {planStep===2&&<><small className="muted">活動量</small>{[['1.2','久坐','辦公室工作、幾乎不運動；每天走不到 3,000 步（約 2 公里）'],['1.375','輕度活動','每週運動 1～3 天；或每天走 3,000～7,500 步（約 2～5 公里）'],['1.55','中度活動','每週運動 3～5 天、每次 30～60 分鐘；或每天走 7,500～10,000 步（約 5～7 公里）'],['1.725','高度活動','每週運動 6～7 天，或站立、勞力型工作；每天走 10,000 步以上（約 7 公里以上）']].map(([v,label,ex])=><label className="radio" key={v}><input type="radio" name="activity" checked={planInput.activity===v} onChange={()=>editPlan({activity:v})}/><span>{label}<br/><small className="tiny">{ex}</small></span></label>)}
         <button className="primary full" disabled={!plan} onClick={()=>setPlanStep(3)}>下一步</button>
         <button className="outline full" onClick={()=>setPlanStep(1)}>上一步</button></>}
-        {planStep===3&&<>{plan&&<><p>{plan.reached?'已達成目標':plan.days===0?(plan.total?'已到預計日期':'起始體重已不高於目標'):plan.days===null?`原計劃每日 ${fmt(planSave.startGoal??settings.goal)} kcal 不會減重`:`原計劃每日 ${fmt(planSave.startGoal??settings.goal)} kcal：預計 ${plan.days} 天後（${plan.date.replace(/-/g,'.')}）達成`}</p>
-          <p className="muted tiny">依目前體重 {planContext(planSave,recordKg).current} 公斤：基礎代謝 {fmt(plan.bmr)}、每日消耗約 {fmt(plan.tdee)} kcal</p>
+        {planStep===3&&<>{plan&&<><p>{planPreviewText(plan,effectiveStartGoal(planSave,settings.goal))}</p>
+          <p className="muted tiny">依目前體重 {planCtx.current} 公斤：基礎代謝 {fmt(plan.bmr)}、每日消耗約 {fmt(plan.tdee)} kcal</p>
           {!plan.reached&&settings.goal<plan.floor&&<p className="notice">每日目標低於建議最低攝取 {fmt(plan.floor)} kcal，長期可能流失肌肉、代謝下降</p>}
-          <p className="muted tiny">{planSave.startDate===planStart&&settings.plan?'這次儲存不改變起點，預計達成日沿用原計劃；要依目前每日目標重算請用「重新開始計劃」。':'預計達成日以目前每日目標為起點固定，之後改每日目標不會改變它；可以先修改上方的「每日熱量目標」預覽。'}</p>
+          <p className="muted tiny">{planSaveNote({saved:settings.plan,toSave:planSave})}</p>
           <button className="primary full" onClick={()=>changeSetting({plan:planSave},'減重計劃已儲存').then(ok=>ok&&setPlanForm(null))}>儲存計劃</button></>}
         <button className="outline full" onClick={()=>setPlanStep(2)}>上一步</button></>}{settings.plan&&<button className="text-button full" onClick={()=>setPlanForm(null)}>取消</button>}</>}
         <p className="muted tiny">依 Mifflin-St Jeor 公式與每公斤約 7,700 kcal 估算，實際因人而異；體重變化請在「體重」卡片記錄。僅供參考，有健康狀況請諮詢醫師或營養師。</p></section>
