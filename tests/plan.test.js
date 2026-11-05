@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planGoal } from '../client/plan.js';
+import { planGoal, planProgress, planToSave, restartPlan } from '../client/plan.js';
 import { planContext } from '../client/plan-context.js';
 import { createJournal } from '../server/journal.js';
 
@@ -101,4 +101,100 @@ test('偏好 plan：startDate 可選，需為有效且不在未來的日期', ()
     assert.throws(() => db.updatePreferences({ plan: { ...sample, startDate } }), e => e.status === 400);
   assert.deepEqual(db.preferences().plan, started);
   db.updatePreferences({ plan: sample }); assert.deepEqual(db.preferences().plan, sample); db.close();
+});
+
+// 計劃進度（ticket 03）：起始 90 → 目標 60，開始日 2026-10-01，每日 1500 kcal（起始體重的每週預計減重 0.41 公斤）
+const started = { sex: 'f', age: 28, height: 165, weight: 90, target: 60, activity: 1.2, startDate: '2026-10-01' };
+const nov26 = new Date(2026, 10, 26);
+test('planProgress：有紀錄時進度以體重計算，回升時下降，限制 0–100%', () => {
+  assert.equal(planProgress(planContext(started, 85), 1500, '2026-11-26', nov26).pct, 17); // 5 ÷ 30
+  assert.equal(planProgress(planContext(started, 75), 1500, '2026-11-26', nov26).pct, 50);
+  assert.equal(planProgress(planContext(started, 95), 1500, '2026-11-26', nov26).pct, 0); // 比起始重
+  assert.equal(planProgress(planContext(started, 58), 1500, '2026-11-26', nov26).pct, 100); // 低於目標
+});
+test('planProgress：沒有體重紀錄時沿用以天數計算的舊進度', () => {
+  // 2026-11-05：總天數 513、剩 478 → 35 ÷ 513 ≈ 7%
+  const p = planProgress(planContext(started), 1500, null, new Date(2026, 10, 5));
+  assert.equal(p.pct, 7); assert.equal(p.days, 478); assert.equal(p.total, 513);
+  assert.equal(planProgress(planContext(started), 1600, null, new Date(2026, 10, 5)).pct, 5); // 每週 0.32 → 總 657 天，35 ÷ 657 ≈ 5%
+  assert.equal(planProgress(planContext(started), 2000, null, new Date(2026, 10, 5)).pct, 0); // 不會減重：沒有總天數
+});
+test('planProgress：起始體重不高於目標時不除以 0', () => {
+  const flat = { ...started, weight: 60 };
+  assert.equal(planProgress(planContext(flat, 62), 1500, '2026-11-26', nov26).pct, 0);
+  assert.equal(planProgress(planContext(flat, 59), 1500, '2026-11-26', nov26).pct, 100);
+  assert.equal(planProgress(planContext(flat), 1500, null, nov26).pct, 100);
+});
+test('planProgress：最新體重 ≤ 目標即已達成，回升到目標之上回到進行中；沒有紀錄時看起始體重', () => {
+  assert.equal(planProgress(planContext(started, 58), 1500, '2026-11-26', nov26).reached, true);
+  assert.equal(planProgress(planContext(started, 60), 1500, '2026-11-26', nov26).reached, true);
+  const back = planProgress(planContext(started, 65), 1500, '2026-11-27', nov26);
+  assert.equal(back.reached, false); assert.equal(back.pct, 83); // 25 ÷ 30
+  assert.equal(planProgress(planContext(started), 1500, null, nov26).reached, false);
+  assert.equal(planProgress(planContext({ ...started, weight: 60 }), 1500, null, nov26).reached, true);
+  // 起始體重已達標，但之後紀錄回升到目標之上：不算達成
+  assert.equal(planProgress(planContext({ ...started, weight: 60 }, 62), 1500, '2026-11-26', nov26).reached, false);
+});
+test('planProgress：計劃線從開始日的起始體重依每週預計減重直線下降，回傳最新紀錄日對照的差距', () => {
+  // 2026-10-01 → 11-26 共 56 天（8 週）：90 − 0.41 × 8 = 86.72
+  const below = planProgress(planContext(started, 85), 1500, '2026-11-26', nov26);
+  assert.equal(below.line, 86.7); assert.equal(below.diff, -1.7);
+  assert.equal(planProgress(planContext(started, 88), 1500, '2026-11-26', nov26).diff, 1.3);
+  // 計劃線不低於目標體重；紀錄早於開始日時計劃線是起始體重
+  const far = planProgress(planContext(started, 61), 1500, '2030-01-01', new Date(2030, 0, 1));
+  assert.equal(far.line, 60); assert.equal(far.diff, 1);
+  assert.equal(planProgress(planContext(started, 92), 1500, '2026-09-20', nov26).diff, 2);
+});
+test('planProgress：沒有紀錄、沒有開始日或依起始體重不會減重時沒有計劃線', () => {
+  for (const p of [planProgress(planContext(started), 1500, null, nov26),
+    planProgress(planContext({ ...started, startDate: undefined }, 85), 1500, '2026-11-26', nov26),
+    planProgress(planContext(started, 85), 2000, '2026-11-26', nov26)]) { assert.equal(p.line, null); assert.equal(p.diff, null); }
+});
+// startGoal：起點設定當下的每日熱量目標（GLOSSARY：起點每日目標）；起點設定或重設時寫入目前每日目標，其餘儲存保留原值。
+const fixed = { ...started, startGoal: 1500 };
+test('planToSave：有紀錄時改活動量、目標等不動起始體重、開始日與起點每日目標（表單體重欄位唯讀，不採用）', () => {
+  const form = { sex: 'f', age: 29, height: 166, weight: 85, target: 58, activity: 1.375 };
+  assert.deepEqual(planToSave(fixed, form, 85, '2026-11-26', 1700),
+    { sex: 'f', age: 29, height: 166, weight: 90, target: 58, activity: 1.375, startDate: '2026-10-01', startGoal: 1500 });
+});
+test('planToSave：沒有紀錄時體重沒改就保留起點，改了體重視為重設起點（開始日今天、起點每日目標為目前每日目標）', () => {
+  const same = { sex: 'f', age: 28, height: 165, weight: 90, target: 55, activity: 1.2 };
+  assert.deepEqual(planToSave(fixed, same, null, '2026-11-26', 1700), { ...same, startDate: '2026-10-01', startGoal: 1500 });
+  assert.deepEqual(planToSave(fixed, { ...same, weight: 88 }, null, '2026-11-26', 1700), { ...same, weight: 88, startDate: '2026-11-26', startGoal: 1700 });
+});
+test('planToSave：舊計劃沒有起點每日目標時，不動起點的儲存不補寫；重設起點才寫入', () => {
+  const same = { sex: 'f', age: 28, height: 165, weight: 90, target: 55, activity: 1.375 };
+  assert.deepEqual(planToSave(started, same, null, '2026-11-26', 1700), { ...same, startDate: '2026-10-01' });
+  assert.deepEqual(planToSave(started, { ...same, weight: 88 }, null, '2026-11-26', 1700), { ...same, weight: 88, startDate: '2026-11-26', startGoal: 1700 });
+});
+test('planToSave：還沒有計劃時從今天開始並寫入目前每日目標；先記過體重則以最新紀錄為起始體重', () => {
+  const form = { sex: 'f', age: 28, height: 165, weight: 70, target: 60, activity: 1.2 };
+  assert.deepEqual(planToSave(null, form, 85, '2026-11-26', 1600), { ...form, weight: 85, startDate: '2026-11-26', startGoal: 1600 });
+  assert.deepEqual(planToSave(null, form, null, '2026-11-26', 1600), { ...form, startDate: '2026-11-26', startGoal: 1600 });
+});
+test('restartPlan：以目前體重、今天與目前每日目標為新的起點，其餘欄位不變', () => {
+  assert.deepEqual(restartPlan(fixed, 85, '2026-11-26', 1700),
+    { sex: 'f', age: 28, height: 165, weight: 85, target: 60, activity: 1.2, startDate: '2026-11-26', startGoal: 1700 });
+  assert.equal(restartPlan(started, 85, '2026-11-26', 1600).startGoal, 1600); // 舊計劃也寫入
+});
+test('planProgress：預計達成日、總天數與計劃線用起點每日目標，之後改每日目標不變；目前每週減重量用目前每日目標', () => {
+  const at1500 = planProgress(planContext(fixed, 85), 1500, '2026-11-26', nov26);
+  const at1700 = planProgress(planContext(fixed, 85), 1700, '2026-11-26', nov26);
+  for (const p of [at1500, at1700]) assert.deepEqual([p.date, p.total, p.line, p.diff], ['2028-02-26', 513, 86.7, -1.7]);
+  // 目前體重 85：BMR 1580、TDEE 1896；目標 1700 → (1896 − 1700) × 7 ÷ 7700 = 0.18
+  assert.equal(at1700.weekly, 0.18);
+  // 目標 2000 高於目前 TDEE：目前不會再減重，但原計劃仍在
+  const at2000 = planProgress(planContext(fixed, 85), 2000, '2026-11-26', nov26);
+  assert.deepEqual([at2000.weekly, at2000.total, at2000.line], [0, 513, 86.7]);
+});
+test('planProgress：舊計劃沒有起點每日目標時退回目前每日目標（預計達成日隨每日目標變動）', () => {
+  // 目標 1700、起始體重 TDEE 1956：每週 0.23 → 30 公斤需 914 天
+  assert.equal(planProgress(planContext(started), 1700, null, nov26).total, 914);
+  assert.equal(planProgress(planContext(fixed), 1700, null, nov26).total, 513);
+});
+test('planProgress：記體重前後預計達成日與總天數相同', () => {
+  const before = planProgress(planContext(started), 1500, null, new Date(2026, 10, 5));
+  const after = planProgress(planContext(started, 85), 1500, '2026-11-05', new Date(2026, 10, 5));
+  assert.deepEqual([before.date, before.total, before.days], ['2028-02-26', 513, 478]);
+  assert.deepEqual([after.date, after.total, after.days], ['2028-02-26', 513, 478]);
 });

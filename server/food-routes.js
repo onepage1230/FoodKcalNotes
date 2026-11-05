@@ -85,7 +85,7 @@ export function attachFoodRoutes(app, { requireProvider, providerChain, running,
   });
   app.delete('/api/weights/:day', (req, res) => { req.journal.deleteWeight(req.params.day); res.json(req.journal.weightState()); });
   app.delete('/api/meals/:id', (req, res) => { req.journal.deleteMeal(req.params.id); res.json({ ok: true }); });
-  app.post('/api/settings', (req, res) => res.json(req.journal.updatePreferences(req.body)));
+  app.post('/api/settings', (req, res) => res.json(req.journal.updatePreferences(req.body, { today: localDay(now()) })));
   app.get('/api/foods', (req, res) => res.json({ foods: req.journal.foods(typeof req.query.q === 'string' ? req.query.q : '') }));
   app.get('/api/export', (req, res) => { res.setHeader('Content-Disposition', 'attachment; filename="meal-journal-backup.json"'); res.json(req.journal.exportData()); });
   // 背景工作：立即回傳工作 id，關掉 app 也繼續跑；進度與結果存在日誌的 jobs 表。work 回傳要寫入的結果（result、mealId）。

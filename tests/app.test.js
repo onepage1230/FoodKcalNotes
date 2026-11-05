@@ -1015,3 +1015,29 @@ test('日誌 API 回傳體重狀態：沒有紀錄時目前體重是計劃體重
   assert.deepEqual(after.weight, { weights: [{ day: '2026-11-05', kg: 80 }], current: { kg: 80, day: '2026-11-05', source: 'record' } });
   assert.equal(after.settings.goal, 1500); assert.deepEqual(after.settings.plan, plan);
 });
+
+// 重新開始計劃（ticket 03）：開始日由前端的「今天」傳入，裝置時區可能比伺服器快一兩天；伺服器以注入的 now 判斷本地今天。
+test('計劃開始日：比伺服器今天晚一兩天（裝置時區較快）時以伺服器今天為準；更晚仍拒絕', async t => {
+  const f = await fixture(t, { now: () => new Date(2026, 2, 10, 13, 0) }); // 伺服器今天 2026-03-10
+  const plan = { sex: 'f', age: 28, height: 165, weight: 85, target: 60, activity: 1.2 };
+  for (const startDate of ['2026-03-11', '2026-03-12']) {
+    const res = await f.request('/api/settings', { plan: { ...plan, startDate } });
+    assert.equal(res.status, 200, startDate); assert.equal((await res.json()).plan.startDate, '2026-03-10');
+  }
+  assert.equal((await (await f.request('/api/settings', { plan: { ...plan, startDate: '2026-03-08' } })).json()).plan.startDate, '2026-03-08');
+  const res = await f.request('/api/settings', { plan: { ...plan, startDate: '2026-03-13' } });
+  assert.equal(res.status, 400); assert.equal((await res.json()).error, '計劃開始日期不正確。');
+  assert.equal(f.journal.preferences().plan.startDate, '2026-03-08');
+});
+test('起點每日目標 startGoal：可省略；500–10000 的整數才保存，否則 400；之後改每日目標不改動它', async t => {
+  const f = await weightFixture(t);
+  const plan = { sex: 'f', age: 28, height: 165, weight: 90, target: 60, activity: 1.2, startDate: '2026-10-01' };
+  assert.equal((await (await f.request('/api/settings', { plan })).json()).plan.startGoal, undefined); // 舊計劃沒有此欄位
+  for (const startGoal of [499, 10001, 1500.5, '1500', null]) {
+    const res = await f.request('/api/settings', { plan: { ...plan, startGoal } });
+    assert.equal(res.status, 400, String(startGoal)); assert.equal((await res.json()).error, '起點每日目標不正確，需為 500～10000 kcal 的整數。');
+  }
+  for (const startGoal of [500, 10000, 1500]) assert.equal((await (await f.request('/api/settings', { plan: { ...plan, startGoal } })).json()).plan.startGoal, startGoal);
+  await f.request('/api/settings', { goal: 1700 });
+  assert.deepEqual(f.journal.preferences().plan, { ...plan, startGoal: 1500 });
+});
