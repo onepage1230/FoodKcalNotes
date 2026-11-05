@@ -1,11 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { daysSinceWeight, latestWeightDay, weightStale, weightHint, weightCheck } from './weight.js';
 
-// 設定頁的「體重」卡片。planWeight 是減重計劃裡的體重：沒有紀錄時「目前體重」取自它，所以計劃儲存或清除（planWeight 變動）就重新取得。
-export default function WeightCard({ api, notify, onError, today, planWeight }) {
-  const [data, setData] = useState(null); // { weights, current }
+// 設定頁的「體重」卡片。data（{ weights, current }）由 App 持有並與計劃卡片、營養目標共用；記錄或刪除後以 onChange 交回伺服器的新狀態，其他卡片即時更新。
+export default function WeightCard({ api, notify, onError, today, data, onChange: setData }) {
   const [form, setForm] = useState({ day: '', kg: '' }); // form.day 空字串 = 今天
-  useEffect(() => { api('/api/weights').then(setData).catch(e => onError(e.message)); }, [planWeight]);
   if (!data) return <section className="card weight-card"><h2>體重</h2></section>;
   const { weights: list, current } = data, day = form.day || today(), check = weightCheck(form.kg, day, today());
   const daysSince = daysSinceWeight(latestWeightDay(list), today());
