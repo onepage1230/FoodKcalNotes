@@ -1,6 +1,7 @@
 // 每日營養目標建議值（ADR 0010「目標與提示」，依國健署 DRIs 第八版與國民飲食指標）。純函式，伺服器與前端共用。
 // type：min 下限、range 範圍、max 上限。建議值不存，每次依計劃與每日熱量目標即時計算；設定只存覆寫值。
 // limit：覆寫值允許的範圍（伺服器驗證用）。
+import { readOptions, validKg } from './options.js';
 export const NUTRIENT_GOALS = [
   { total: 'protein', label: '蛋白質', unit: 'g', type: 'min', limit: [1, 500],
     basis: '每公斤體重 1.1 g（71 歲以上 1.2 g）', source: '國健署 DRIs 第八版 蛋白質 RDA' },
@@ -24,7 +25,7 @@ const DEFICIT_PROTEIN = {
 // 目標說明文字：赤字期的蛋白質換成 ADR 0012 的說明，其餘照 NUTRIENT_GOALS。
 export function goalInfo(total, plan, current) {
   const { basis, source, note } = NUTRIENT_GOALS.find(g => g.total === total);
-  if (total === 'protein' && inDeficit(plan, current)) return DEFICIT_PROTEIN;
+  if (total === 'protein' && inDeficit(plan, validKg(current) ?? plan?.weight)) return DEFICIT_PROTEIN;
   return { basis, source, ...(note ? { note } : {}) };
 }
 
@@ -44,10 +45,10 @@ function proteinMin(plan, current) {
   return Math.round(Math.max(1.4 * base, rda * actual));
 }
 
-// plan 可為 null（沒有計劃）：依賴體重的蛋白質為 null，其餘只看每日熱量目標 kcal。current：伺服器提供的目前體重（公斤）。
+// plan 可為 null（沒有計劃）：依賴體重的蛋白質為 null，其餘只看每日熱量目標 kcal。current：伺服器提供的目前體重（公斤），省略或無效時用計劃體重。
 export function suggestedGoals(plan, kcal, current) {
   return {
-    protein: { type: 'min', min: proteinMin(plan, current) },
+    protein: { type: 'min', min: proteinMin(plan, validKg(current) ?? plan?.weight) },
     fat: { type: 'range', min: kcalShare(kcal, 0.2, 9), max: kcalShare(kcal, 0.3, 9) },
     carbs: { type: 'range', min: kcalShare(kcal, 0.5, 4), max: kcalShare(kcal, 0.65, 4) },
     sugar: { type: 'max', max: kcalShare(kcal, 0.1, 4) },
@@ -68,8 +69,10 @@ export function goalStatus(total, goal) {
 }
 export const GOAL_STATUS_TEXT = { ok: '達標', low: '不足', maybeLow: '可能不足', outOfRange: '超出範圍', over: '超標', unknown: '' };
 
+// 選項 { current, overrides }：current 是目前體重，省略、尚未載入或無效時用計劃體重（與 planGoal 一致）。
 // 實際目標 = 覆寫值 ?? 建議值；覆寫以整項為單位（範圍型 min、max 一起覆寫）。
-export function nutrientGoals(plan, kcal, current, overrides = {}) {
+export function nutrientGoals(plan, kcal, options) {
+  const { current, overrides = {} } = readOptions('nutrientGoals', options, ['current', 'overrides']);
   const suggested = suggestedGoals(plan, kcal, current);
   return Object.fromEntries(NUTRIENT_GOALS.map(({ total }) => {
     const { type, ...values } = suggested[total]; const own = overrides?.[total];

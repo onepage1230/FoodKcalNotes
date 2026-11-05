@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { suggestedGoals, nutrientGoals, NUTRIENT_GOALS, goalInfo } from '../client/nutrient-goals.js';
 import { createJournal } from '../server/journal.js';
 
-// 維持期（目前體重 ≤ 目標）：蛋白質照 ADR 0010 的 RDA × 目前體重。第三個參數是伺服器提供的目前體重。
+// 維持期（目前體重 ≤ 目標）：蛋白質照 ADR 0010 的 RDA × 目前體重。suggestedGoals 的第三個參數與 nutrientGoals 的 current 選項是伺服器提供的目前體重。
 const plan = { sex: 'f', age: 28, height: 165, weight: 60, target: 60, activity: 1.2 };
 
 test('建議目標：蛋白質依體重 1.1 g/kg 為下限，脂肪與碳水依熱量比例為範圍，糖與鈉為上限', () => {
@@ -31,17 +31,17 @@ test('建議目標：沒有計劃時蛋白質為 null，其餘照熱量計算；
   assert.deepEqual(none.carbs, { type: 'range', min: null, max: null }); assert.equal(none.sugar.max, null); assert.equal(none.sodiumMg.max, 2300);
 });
 test('實際目標：覆寫值優先，標記 overridden 並保留建議值', () => {
-  const goals = nutrientGoals(plan, 1300, 60, { protein: { min: 90 }, sodiumMg: { max: 2000 } });
+  const goals = nutrientGoals(plan, 1300, { current: 60, overrides: { protein: { min: 90 }, sodiumMg: { max: 2000 } } });
   assert.deepEqual(goals.protein, { type: 'min', min: 90, overridden: true, suggested: { min: 66 } });
   assert.deepEqual(goals.sodiumMg, { type: 'max', max: 2000, overridden: true, suggested: { max: 2300 } });
   assert.deepEqual(goals.fat, { type: 'range', min: 29, max: 43, overridden: false, suggested: { min: 29, max: 43 } });
   assert.deepEqual(Object.keys(goals), NUTRIENT_GOALS.map(n => n.total));
-  assert.deepEqual(nutrientGoals(plan, 1300, 60).sugar, nutrientGoals(plan, 1300, 60, {}).sugar); // 沒有覆寫物件也可以
+  assert.deepEqual(nutrientGoals(plan, 1300, { current: 60 }).sugar, nutrientGoals(plan, 1300, { current: 60, overrides: {} }).sugar); // 沒有覆寫物件也可以
 });
 test('計劃或熱量改變時只有未覆寫的項目跟著變', () => {
   const overrides = { protein: { min: 90 }, carbs: { min: 120, max: 180 } };
-  const before = nutrientGoals(plan, 1300, 60, overrides);
-  const after = nutrientGoals({ ...plan, weight: 70, target: 70 }, 1600, 70, overrides);
+  const before = nutrientGoals(plan, 1300, { current: 60, overrides });
+  const after = nutrientGoals({ ...plan, weight: 70, target: 70 }, 1600, { current: 70, overrides });
   assert.equal(after.protein.min, 90); assert.deepEqual([after.carbs.min, after.carbs.max], [120, 180]);
   assert.equal(after.protein.suggested.min, 77); // 建議值仍即時重算，只是不採用
   assert.notDeepEqual([after.fat.min, after.fat.max], [before.fat.min, before.fat.max]);
@@ -81,9 +81,9 @@ test('達成目標（目前體重 ≤ 目標）回到 RDA × 目前體重；沒�
 });
 
 test('赤字期覆寫過的蛋白質目標不受影響，建議值仍即時重算；其餘四項不變', () => {
-  const goals = nutrientGoals(tall165(90), 1500, 80, { protein: { min: 80 } });
+  const goals = nutrientGoals(tall165(90), 1500, { current: 80, overrides: { protein: { min: 80 } } });
   assert.deepEqual(goals.protein, { type: 'min', min: 80, overridden: true, suggested: { min: 105 } });
-  assert.deepEqual(goals.fat, nutrientGoals(null, 1500, null).fat);
+  assert.deepEqual(goals.fat, nutrientGoals(null, 1500).fat);
   assert.deepEqual([goals.carbs.min, goals.carbs.max, goals.sugar.max, goals.sodiumMg.max], [188, 244, 38, 2300]);
 });
 test('目標說明：赤字期蛋白質說明算法、間接出處與腎功能提醒；維持期與沒有計劃顯示原本的 DRIs 說明', () => {
@@ -122,4 +122,19 @@ test('偏好 nutrientGoals：數值、範圍、欄位與 min ≤ max 驗證，�
   assert.deepEqual(db.preferences().nutrientGoals, { sugar: { max: 30 } });
   db.updatePreferences({ nutrientGoals: { fat: { min: 50, max: 50 } } }); // min = max 允許
   assert.deepEqual(db.preferences().nutrientGoals.fat, { min: 50, max: 50 }); db.close();
+});
+
+test('實際目標：目前體重尚未載入或無效（undefined、NaN、0、負數）時，與沒有紀錄一樣退回計劃體重，不產生 NaN 或負數', () => {
+  const p = tall165(90), fallback = nutrientGoals(p, 1500, { current: 90 }).protein; // 計劃體重 90、BMI 25 對應 68.1 → 105
+  assert.equal(fallback.min, 105);
+  for (const bad of [undefined, NaN, 0, -5, null]) assert.deepEqual(nutrientGoals(p, 1500, { current: bad }).protein, fallback, String(bad));
+  assert.deepEqual(nutrientGoals(p, 1500).protein, fallback);
+  assert.equal(suggestedGoals(p, 1500, undefined).protein.min, 105);
+  assert.equal(suggestedGoals(p, 1500, -5).protein.min, 105);
+  assert.equal(nutrientGoals(null, 1500, { current: NaN }).protein.min, null); // 沒有計劃仍是 null
+});
+test('實際目標：呼叫方式錯誤時明確丟錯，不把覆寫物件當成體重', () => {
+  assert.throws(() => nutrientGoals(plan, 1300, { protein: { min: 80 } }), /nutrientGoals.*protein/); // 舊式：直接把覆寫物件放第三參數
+  assert.throws(() => nutrientGoals(plan, 1300, 60), /nutrientGoals/); // 舊式：第三參數傳體重數字
+  assert.throws(() => nutrientGoals(plan, 1300, { current: 60, override: {} }), /override/); // 選項名稱拼錯
 });

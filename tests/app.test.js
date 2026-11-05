@@ -922,7 +922,7 @@ test('候選餐點：假日顯示最近吃過（含平日、只吃一次），�
   assert.deepEqual((await list()).map(c => [c.name, c.count]), [['週五早餐', 3]]);
 });
 
-// 體重紀錄（weight-tracking ticket 01）：GET /api/weights、PUT/DELETE /api/weights/:day；「今天」由注入的 now 決定（2026-11-05）。
+// 體重紀錄（docs/specs/weight-tracking.md）：GET /api/weights、PUT/DELETE /api/weights/:day；「今天」由注入的 now 決定（2026-11-05）。
 const weightFixture = (t, extra) => fixture(t, { now: () => new Date(2026, 10, 5, 13, 0), ...extra });
 const foodsOf = f => f.journal.foods().map(({ id, name, kcalPer100g }) => ({ id, name, kcalPer100g }));
 const putWeight = (f, day, kg, extra) => f.request('/api/weights/' + day, { kg }, { method: 'PUT', ...extra });
@@ -1002,7 +1002,7 @@ test('體重紀錄：朋友日誌各自一份，與主日誌互不可見', async
   assert.equal((await (await f.request('/api/weights')).json()).weights.length, 1);
 });
 
-// 目前體重進入計劃計算（weight-tracking ticket 02）：日誌 API 一併回傳體重狀態，前端不另外推導目前體重。
+// 目前體重進入計劃計算（docs/specs/weight-tracking.md）：日誌 API 一併回傳體重狀態，前端不另外推導目前體重。
 test('日誌 API 回傳體重狀態：沒有紀錄時目前體重是計劃體重，記錄後改為最新紀錄；每日熱量目標與計劃不變', async t => {
   const f = await weightFixture(t);
   const journal = async () => (await (await f.request('/api/journal?day=2026-11-05&today=2026-11-05')).json());

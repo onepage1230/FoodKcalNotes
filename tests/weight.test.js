@@ -35,3 +35,13 @@ test('輸入檢查：範圍、最多一位小數、不得未來；錯誤時給�
   const two = check('70.25'); assert.equal(two.ok, false); assert.match(two.message, /一位小數/);
   assert.equal(check('70', '2026-11-06').ok, false); assert.match(check('70', '2026-11-06').message, /未來/);
 });
+
+test('latest：只有最後一次開始的請求算數，較早的回應晚到會被丟棄', async () => {
+  const { latest } = await import('../client/latest.js');
+  const seq = latest();
+  const a = seq.begin(), b = seq.begin();
+  assert.equal(seq.isCurrent(a), false);
+  assert.equal(seq.isCurrent(b), true);
+  seq.begin(); // 例如體重卡片本身更新了體重，之前尚未回來的請求作廢
+  assert.equal(seq.isCurrent(b), false);
+});
