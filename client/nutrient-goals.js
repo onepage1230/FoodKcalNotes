@@ -1,10 +1,16 @@
 // 每日營養目標建議值（ADR 0010「目標與提示」，依國健署 DRIs 第八版與國民飲食指標）。純函式，伺服器與前端共用。
 // type：min 下限、range 範圍、max 上限。建議值不存，每次依計劃與每日熱量目標即時計算；設定只存覆寫值。
 // limit：覆寫值允許的範圍（伺服器驗證用）。
-import { readOptions, validKg } from './options.js';
+import { assertPlanContext } from './plan-context.js';
+
+// 蛋白質建議的係數（ADR 0010、0012）。說明文字與計算都從這組常數來，不在兩處各寫一份。
+const RDA_G_PER_KG = 1.1, RDA_G_PER_KG_71 = 1.2; // 國健署 DRIs 第八版 RDA；71 歲以上較高
+const DEFICIT_G_PER_KG = 1.4; // 減重期每公斤基準體重（只有間接出處，見 ADR 0012）
+const REFERENCE_BMI = 25; // 參考體重 = BMI 25 對應的體重
+const EXCESS_SHARE = 0.33; // 超過參考體重的部分只計入這個比例（ESPEN/UEG 調整體重係數）
 export const NUTRIENT_GOALS = [
   { total: 'protein', label: '蛋白質', unit: 'g', type: 'min', limit: [1, 500],
-    basis: '每公斤體重 1.1 g（71 歲以上 1.2 g）', source: '國健署 DRIs 第八版 蛋白質 RDA' },
+    basis: `每公斤體重 ${RDA_G_PER_KG} g（71 歲以上 ${RDA_G_PER_KG_71} g）`, source: '國健署 DRIs 第八版 蛋白質 RDA' },
   { total: 'fat', label: '脂肪', unit: 'g', type: 'range', limit: [1, 500],
     basis: '每日熱量的 20～30%（每 g 9 kcal）', source: '國健署 DRIs 第八版 脂質 AMDR' },
   { total: 'carbs', label: '碳水化合物', unit: 'g', type: 'range', limit: [1, 1500],
@@ -18,37 +24,37 @@ export const NUTRIENT_GOALS = [
 
 // 赤字期蛋白質的說明（ADR 0012）：1.4 只有間接出處，如實寫明；附腎功能提醒。
 const DEFICIT_PROTEIN = {
-  basis: '減重期每公斤基準體重 1.4 g，且不低於 1.1 g（71 歲以上 1.2 g）× 起始與目前較大的體重；基準體重取起始與目前較大者，超過 BMI 25 對應體重的部分只計入三分之一',
+  basis: `減重期每公斤基準體重 ${DEFICIT_G_PER_KG} g，且不低於 ${RDA_G_PER_KG} g（71 歲以上 ${RDA_G_PER_KG_71} g）× 起始與目前較大的體重；基準體重取起始與目前較大者，超過 BMI ${REFERENCE_BMI} 對應體重的部分只計入 ${EXCESS_SHARE}（約三分之一）`,
   source: '間接依據：ISSN 立場聲明 1.4–2.0 g/kg 範圍下緣；調整體重依 ESPEN/UEG 指引；下限依國健署 DRIs 第八版 RDA',
   note: '腎功能不佳者請先諮詢醫師或營養師',
 };
-// 目標說明文字：赤字期的蛋白質換成 ADR 0012 的說明，其餘照 NUTRIENT_GOALS。
-export function goalInfo(total, plan, current) {
+// 目標說明文字：赤字期的蛋白質換成 ADR 0012 的說明，其餘照 NUTRIENT_GOALS。ctx 是 planContext() 的結果。
+export function goalInfo(total, ctx) {
   const { basis, source, note } = NUTRIENT_GOALS.find(g => g.total === total);
-  if (total === 'protein' && inDeficit(plan, validKg(current) ?? plan?.weight)) return DEFICIT_PROTEIN;
+  if (total === 'protein' && inDeficit(assertPlanContext('goalInfo', ctx))) return DEFICIT_PROTEIN;
   return { basis, source, ...(note ? { note } : {}) };
 }
 
 const kcalShare = (kcal, pct, perGram) => Number.isFinite(kcal) && kcal > 0 ? Math.round(kcal * pct / perGram) : null;
 
-// 減重計劃進行中（ADR 0012）：有計劃且目前體重 > 目標體重。
-const inDeficit = (plan, current) => Number.isFinite(plan?.weight) && plan.weight > 0 && Number.isFinite(current) && current > plan.target;
+// 減重計劃進行中（ADR 0012，營養目標用）：有計劃且「目前體重」> 目標體重，因為蛋白質下限要隨實際進度在達成後回到維持期。
+// plan.js 的「已達標」（lose <= 0）則看「起始體重」≤ 目標，是計劃本身是否有東西要減；兩者基準不同、刻意分開（合併屬 docs/specs/weight-tracking.md 的後續範圍）。
+const inDeficit = ({ plan, current }) => !!plan && current !== null && current > plan.target;
 
-// 蛋白質下限（ADR 0010、0012）。plan.weight 是起始體重，current 是目前體重。
-function proteinMin(plan, current) {
-  const weight = Number.isFinite(plan?.weight) && plan.weight > 0 ? plan.weight : null;
-  if (!weight || !(Number.isFinite(current) && current > 0)) return null;
-  const rda = plan.age >= 71 ? 1.2 : 1.1;
-  if (!inDeficit(plan, current)) return Math.round(current * rda);
-  const actual = Math.max(weight, current), ref = 25 * (plan.height / 100) ** 2;
-  const base = actual <= ref ? actual : ref + 0.33 * (actual - ref);
-  return Math.round(Math.max(1.4 * base, rda * actual));
+// 蛋白質下限（ADR 0010、0012）。plan.weight 是起始體重，current 是目前體重（planContext 已保證有效）。
+function proteinMin({ plan, current }) {
+  if (!plan) return null;
+  const rdaPerKg = plan.age >= 71 ? RDA_G_PER_KG_71 : RDA_G_PER_KG;
+  if (!inDeficit({ plan, current })) return Math.round(current * rdaPerKg);
+  const actualKg = Math.max(plan.weight, current), referenceKg = REFERENCE_BMI * (plan.height / 100) ** 2;
+  const baseKg = actualKg <= referenceKg ? actualKg : referenceKg + EXCESS_SHARE * (actualKg - referenceKg); // 基準體重
+  return Math.round(Math.max(DEFICIT_G_PER_KG * baseKg, rdaPerKg * actualKg));
 }
 
-// plan 可為 null（沒有計劃）：依賴體重的蛋白質為 null，其餘只看每日熱量目標 kcal。current：伺服器提供的目前體重（公斤），省略或無效時用計劃體重。
-export function suggestedGoals(plan, kcal, current) {
+// ctx 是 planContext()；沒有計劃時依賴體重的蛋白質為 null，其餘只看每日熱量目標 kcal。
+export function suggestedGoals(ctx, kcal) {
   return {
-    protein: { type: 'min', min: proteinMin(plan, validKg(current) ?? plan?.weight) },
+    protein: { type: 'min', min: proteinMin(assertPlanContext('suggestedGoals', ctx)) },
     fat: { type: 'range', min: kcalShare(kcal, 0.2, 9), max: kcalShare(kcal, 0.3, 9) },
     carbs: { type: 'range', min: kcalShare(kcal, 0.5, 4), max: kcalShare(kcal, 0.65, 4) },
     sugar: { type: 'max', max: kcalShare(kcal, 0.1, 4) },
@@ -69,11 +75,11 @@ export function goalStatus(total, goal) {
 }
 export const GOAL_STATUS_TEXT = { ok: '達標', low: '不足', maybeLow: '可能不足', outOfRange: '超出範圍', over: '超標', unknown: '' };
 
-// 選項 { current, overrides }：current 是目前體重，省略、尚未載入或無效時用計劃體重（與 planGoal 一致）。
+// ctx 是 planContext()（目前體重的退回規則在那裡）；overrides 是使用者的逐項覆寫。
 // 實際目標 = 覆寫值 ?? 建議值；覆寫以整項為單位（範圍型 min、max 一起覆寫）。
-export function nutrientGoals(plan, kcal, options) {
-  const { current, overrides = {} } = readOptions('nutrientGoals', options, ['current', 'overrides']);
-  const suggested = suggestedGoals(plan, kcal, current);
+export function nutrientGoals(ctx, kcal, overrides = {}) {
+  if (overrides === null || typeof overrides !== 'object') throw new TypeError('nutrientGoals：第三個參數是覆寫物件（體重請放進 planContext）');
+  const suggested = suggestedGoals(ctx, kcal);
   return Object.fromEntries(NUTRIENT_GOALS.map(({ total }) => {
     const { type, ...values } = suggested[total]; const own = overrides?.[total];
     return [total, { type, ...(own || values), overridden: !!own, suggested: values }];
