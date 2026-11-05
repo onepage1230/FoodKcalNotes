@@ -271,3 +271,26 @@ test('planSaveNote：儲存計劃前說明預計達成日會不會變', () => {
   const retune = '起始體重、開始日與起點每日目標不變，但改了性別、年齡、身高、活動量或目標體重，預計達成日會重新估算。';
   for (const patch of [{ activity: 1.375 }, { sex: 'm' }, { age: 29 }, { height: 170 }, { target: 58 }]) assert.equal(planSaveNote({ saved: fixed, toSave: { ...keep, ...patch } }), retune, JSON.stringify(patch));
 });
+
+// ---- 計劃線共用計算（ticket 04：趨勢圖與計劃卡片的「實際比計劃線高／低」用同一份） ----
+import { planLineSpec, planLineAt } from '../client/plan.js';
+test('planLineSpec：起始體重的 TDEE 減起點每日目標得每週減重量；沒有開始日、不會減重、已不高於目標為 null', () => {
+  assert.deepEqual(planLineSpec(planContext(started), 1500), { startDay: '2026-10-01', startKg: 90, targetKg: 60, weekly: 0.41 });
+  assert.deepEqual(planLineSpec(planContext({ ...started, startGoal: 1300 }), 1500), { startDay: '2026-10-01', startKg: 90, targetKg: 60, weekly: 0.6 }); // (1956.3 − 1300) × 7 ÷ 7700
+  assert.equal(planLineSpec(planContext({ ...started, startDate: undefined }), 1500), null);
+  assert.equal(planLineSpec(planContext(started), 2000), null); // 每日目標高於 TDEE
+  assert.equal(planLineSpec(planContext({ ...started, target: 95 }), 1500), null);
+  assert.equal(planLineSpec(planContext(null), 1500), null);
+});
+test('planLineAt：開始日是起始體重，每天降 weekly÷7，不低於目標，開始日之前不上升', () => {
+  const spec = planLineSpec(planContext(started), 1500);
+  assert.equal(planLineAt(spec, '2026-10-01'), 90);
+  assert.equal(Math.round(planLineAt(spec, '2026-10-15') * 100) / 100, 89.18); // 14 天 × 0.41 ÷ 7 = 0.82
+  assert.equal(planLineAt(spec, '2026-09-20'), 90);
+  assert.equal(planLineAt(spec, '2030-01-01'), 60);
+});
+test('計劃卡片的計劃線與趨勢圖同源：planProgress.line 等於 planLineAt 四捨五入到一位', () => {
+  const p = planProgress(planContext(started, 85), 1500, '2026-11-26', nov26);
+  assert.equal(p.line, Math.round(planLineAt(planLineSpec(planContext(started, 85), 1500), '2026-11-26') * 10) / 10);
+  assert.equal(p.line, 86.7); // 90 − 0.41 × 56 ÷ 7 = 86.72
+});

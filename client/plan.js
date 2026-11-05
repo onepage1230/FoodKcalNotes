@@ -1,6 +1,7 @@
 // 減重目標：Mifflin-St Jeor 估算 BMR/TDEE，以每日目標 goal 推算每週減重 weekly 與預計達成日
 // （1 kg 脂肪 ≈ 7700 kcal）；total 為整個計劃的天數。
 import { assertPlanContext } from './plan-context.js';
+import { dayIndex } from './weight.js';
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 // ctx 是 planContext(plan, current)：目前體重用於 BMR、TDEE、最低攝取與每週減重量；沒有目前體重時 planContext 已退回計劃體重。
@@ -48,16 +49,21 @@ export const restartPlan = ({ saved, currentKg, today, goal }) => ({ ...saved, w
 // 計劃線：從開始日的起始體重，依原計劃的每週預計減重量（起始體重的 TDEE 減起點每日目標）直線下降到目標，與預計達成日同一套語意。line 是最新紀錄日的計劃線體重，diff = 實際 − 計劃線，皆到一位小數；
 // 沒有紀錄、沒有開始日、起始體重不高於目標或依起始體重不會減重時為 null。
 const round1 = n => Math.round(n * 10) / 10;
-const dayIndex = s => Date.parse(s) / 864e5;
+// 計劃線的描述（趨勢圖與計劃卡片共用，只有這裡算）：{ startDay, startKg, targetKg, weekly }；沒有開始日、起始體重不高於目標或依起始體重不會減重時為 null。
+export function planLineSpec(ctx, goal) {
+  const { plan } = assertPlanContext('planLineSpec', ctx);
+  if (!plan?.startDate || plan.weight - plan.target <= 0) return null;
+  const weekly = startWeekly(plan, goal);
+  return weekly ? { startDay: plan.startDate, startKg: plan.weight, targetKg: plan.target, weekly } : null;
+}
+// 某一天的計劃線體重（精確值，不四捨五入）：開始日之前取起始體重，到達目標後固定為目標。
+export const planLineAt = (spec, day) => Math.max(spec.targetKg, spec.startKg - spec.weekly * Math.max(0, dayIndex(day) - dayIndex(spec.startDay)) / 7);
 export function planProgress(ctx, goal, recordDay, today = new Date()) {
   const { plan, current } = assertPlanContext('planProgress', ctx), g = planGoal(ctx, goal, today), lose = plan.weight - plan.target;
   const kg = recordDay ? current : plan.weight;
-  const planWeekly = lose > 0 ? startWeekly(plan, goal) : 0;
+  const spec = recordDay ? planLineSpec(ctx, goal) : null;
   let line = null, diff = null;
-  if (recordDay && plan.startDate && planWeekly) {
-    const exact = Math.max(plan.target, plan.weight - planWeekly * Math.max(0, dayIndex(recordDay) - dayIndex(plan.startDate)) / 7);
-    line = round1(exact); diff = round1(kg - exact);
-  }
+  if (spec) { const exact = planLineAt(spec, recordDay); line = round1(exact); diff = round1(kg - exact); }
   // 達成判定每次即時看最新體重（沒有紀錄時看起始體重），不鎖定。
   if (kg <= plan.target) return { ...g, reached: true, pct: 100, line, diff };
   // 沒有紀錄時沿用以天數計算的舊進度（升級後不跳變）；起始體重不高於目標（lose ≤ 0）而目前高於目標時為 0，不除以 0。
