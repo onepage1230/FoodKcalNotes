@@ -8,6 +8,7 @@ export const WEEKDAY_MIN_COUNT = 2;
 
 const pad = n => String(n).padStart(2, '0');
 export const localDay = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+export const localTime = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`; // 伺服器本地時分 HH:MM
 export const shiftDay = (day, n) => { const d = new Date(day + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 const weekday = day => new Date(day + 'T12:00:00Z').getUTCDay(); // 0 週日～6 週六
 const isWeekday = day => weekday(day) >= 1 && weekday(day) <= 5;

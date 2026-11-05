@@ -728,14 +728,14 @@ test('背景分析自動存檔後，補估的營養素出現在餐點中並標�
   assert.equal(kept.items[0].kcalPer100g, 140); assert.equal(kept.items[0].proteinPer100g, null);
 });
 
-// 再記一次（repeat-meals ticket 01）：POST /api/meals/:id/repeat
-const localToday = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+// 再記一次（repeat-meals ticket 01）：POST /api/meals/:id/repeat；「現在」由 createApp 的 now 注入（2026-11-05 週四 13:00），避免本地午夜前後偶發失敗。
+const REPEAT_NOW = new Date(2026, 10, 5, 13, 0), REPEAT_TODAY = '2026-11-05';
 const repeatItems = foodId => [
   { id: 'src-1', name: '吐司', grams: 60, kcalPer100g: 260, source: 'web', sourceUrl: 'https://example.com/toast', sourceTitle: '吐司營養', foodId, matched: true, recognizedName: '白吐司',
     proteinPer100g: 8, fatPer100g: 4, carbsPer100g: 48, sugarPer100g: null, sodiumMgPer100g: 450, estimated: ['proteinPer100g'], nutrientsEdited: false, cache: true },
   { id: 'src-2', name: '豆漿', grams: 250, kcalPer100g: 35, source: 'llm', proteinPer100g: null, fatPer100g: null, carbsPer100g: null, sugarPer100g: null, sodiumMgPer100g: null, nutrientsEdited: true, cache: false }];
 async function repeatFixture(t, extra) {
-  const f = await fixture(t, extra);
+  const f = await fixture(t, { now: () => new Date(REPEAT_NOW), ...extra });
   // 庫裡的吐司有 estimated 蛋白質、其餘營養素未知：若複製觸發補值或加別名，庫內容就會改變。
   const foodId = f.journal.putFood({ name: '吐司', kcalPer100g: 260, source: 'web', sourceUrl: 'https://example.com/toast', sourceTitle: '吐司營養', proteinPer100g: 8, fatPer100g: null, carbsPer100g: null, sugarPer100g: null, sodiumMgPer100g: null, estimated: ['proteinPer100g'] });
   const src = await (await f.request('/api/meals', { name: '早餐', day: '2026-01-05', time: '08:10', photo: 'data:image/jpeg;base64,AAAA', items: repeatItems(foodId) })).json();
@@ -747,13 +747,15 @@ test('再記一次：複製成今天的新餐點，項目原樣保留、換新 i
   assert.equal(src.hasPhoto, true);
   const res = await f.request(`/api/meals/${src.id}/repeat`, {}); const m = await res.json();
   assert.equal(res.status, 200); assert.notEqual(m.id, src.id);
-  assert.equal(m.name, '早餐'); assert.equal(m.day, localToday()); assert.match(m.time, /^\d\d:\d\d$/);
+  assert.equal(m.name, '早餐'); assert.equal(m.day, REPEAT_TODAY); assert.equal(m.time, '13:00');
   assert.equal(m.photo, ''); assert.equal(m.hasPhoto, false); assert.equal(m.kcal, src.kcal);
   assert.equal(m.items.length, 2);
   m.items.forEach((item, i) => {
     assert.notEqual(item.id, src.items[i].id); assert.ok(item.id);
-    assert.deepEqual({ ...item, id: 0 }, { ...src.items[i], id: 0 });
+    // 複製出的項目一律 cache:false（不寫入食物庫，spec repeat-meals），其餘欄位原樣。
+    assert.equal(item.cache, false); assert.deepEqual({ ...item, id: 0, cache: 0 }, { ...src.items[i], id: 0, cache: 0 });
   });
+  assert.equal(src.items[0].cache, true); // 來源本來是可快取的網路資料
   assert.equal(m.items[0].foodId, foodId); assert.deepEqual(m.items[0].estimated, ['proteinPer100g']); assert.equal(m.items[1].nutrientsEdited, true);
   assert.deepEqual(m.nutrients, src.nutrients);
   assert.deepEqual(await (await f.request('/api/meals/' + m.id)).json(), m); // 已存入
@@ -770,11 +772,10 @@ test('再記一次：不寫食物庫、不補營養素、不加別名；來源�
 });
 test('再記一次：time 省略用伺服器現在；有給就用給定值；日期一律今天', async t => {
   const { f, src } = await repeatFixture(t);
-  const hm = d => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  const a = hm(new Date()), m = await (await f.request(`/api/meals/${src.id}/repeat`, {})).json(), b = hm(new Date());
-  assert.ok(m.time === a || m.time === b); assert.equal(m.day, localToday());
+  const m = await (await f.request(`/api/meals/${src.id}/repeat`, {})).json();
+  assert.equal(m.time, '13:00'); assert.equal(m.day, REPEAT_TODAY);
   const given = await (await f.request(`/api/meals/${src.id}/repeat`, { time: '07:05' })).json();
-  assert.equal(given.time, '07:05'); assert.equal(given.day, localToday());
+  assert.equal(given.time, '07:05'); assert.equal(given.day, REPEAT_TODAY);
 });
 test('再記一次：來源不存在 404；time 格式不正確 400', async t => {
   const { f, src } = await repeatFixture(t);
@@ -782,11 +783,11 @@ test('再記一次：來源不存在 404；time 格式不正確 400', async t =>
   for (const time of ['9:00', '24:00', '12:60', 'abc', '', 900, null, ['09:00']]) {
     const r = await f.request(`/api/meals/${src.id}/repeat`, { time }); assert.equal(r.status, 400, JSON.stringify(time)); assert.match((await r.json()).error, /時間/);
   }
-  assert.equal((await (await f.request('/api/journal?day=' + localToday())).json()).meals.length, 0); // 失敗不留下餐點
+  assert.equal((await (await f.request('/api/journal?day=' + REPEAT_TODAY)).json()).meals.length, 0); // 失敗不留下餐點
 });
 test('再記一次：當日總量、營養素總計與連勝照常更新', async t => {
   const { f, src } = await repeatFixture(t);
-  const today = localToday(), get = async () => (await f.request(`/api/journal?day=${today}&today=${today}`)).json();
+  const today = REPEAT_TODAY, get = async () => (await f.request(`/api/journal?day=${today}&today=${today}`)).json();
   const before = await get(); assert.equal(before.meals.length, 0); assert.equal(before.streak, 0);
   await f.request(`/api/meals/${src.id}/repeat`, { time: '08:00' });
   const after = await get();
@@ -808,8 +809,42 @@ test('再記一次：朋友日誌只能複製自己日誌的餐點，且不碰�
   const copy = await (await f.request(`/api/meals/${mine.id}/repeat`, { time: '10:00' }, friend)).json();
   assert.equal(copy.name, '朋友餐'); assert.equal(copy.time, '10:00');
   assert.equal(JSON.stringify(f.journal.foods()), foods); // 即使 friendsCache 開啟，複製也不寫共用庫
-  assert.equal((await (await f.request('/api/journal?day=' + localToday(), null, friend)).json()).meals.length, 1);
-  assert.equal((await (await f.request('/api/journal?day=' + localToday())).json()).meals.length, 0); // 擁有者日誌不受影響
+  assert.equal((await (await f.request('/api/journal?day=' + REPEAT_TODAY, null, friend)).json()).meals.length, 1);
+  assert.equal((await (await f.request('/api/journal?day=' + REPEAT_TODAY)).json()).meals.length, 0); // 擁有者日誌不受影響
+});
+
+test('再記一次後再編輯：只改克數再存，食物庫不變', async t => {
+  const { f, src } = await repeatFixture(t);
+  const foods = JSON.stringify(f.journal.foods());
+  const copy = await (await f.request(`/api/meals/${src.id}/repeat`, { time: '09:00' })).json();
+  const edited = await f.request('/api/meals', { ...copy, items: copy.items.map(i => ({ ...i, grams: i.grams + 10 })) });
+  assert.equal(edited.status, 200); assert.equal((await edited.json()).items[0].grams, 70);
+  assert.equal(JSON.stringify(f.journal.foods()), foods);
+});
+// 來源餐點當時沒寫入食物庫（例如朋友未開 FRIENDS_CACHE 時記的、或維護者整理過庫）：複製後再編輯存檔，
+// 未命中的可快取項目不寫入、也不補營養素；命中項目（matched）與「直接編輯原餐點再存」的結果一致（補別名、補 null 營養素）。
+test('再記一次後再編輯：未命中的網路資料不寫入食物庫；命中項目與編輯原餐點一致', async t => {
+  const egg = { name: '荷包蛋', grams: 50, kcalPer100g: 200, source: 'web', sourceUrl: 'https://example.com/egg', sourceTitle: '蛋', cache: true,
+    proteinPer100g: 13, fatPer100g: 15, carbsPer100g: 1, sugarPer100g: null, sodiumMgPer100g: 140 };
+  const setup = async () => {
+    const f = await fixture(t, { now: () => new Date(REPEAT_NOW) });
+    const foodId = f.journal.putFood({ name: '吐司', kcalPer100g: 260, source: 'web', sourceUrl: 'https://example.com/toast', sourceTitle: '吐司營養', proteinPer100g: 8, estimated: ['proteinPer100g'] });
+    const items = [{ name: '吐司', grams: 60, kcalPer100g: 260, source: 'web', foodId, matched: true, recognizedName: '烤吐司', proteinPer100g: 8, fatPer100g: 4, sugarPer100g: 5, estimated: ['proteinPer100g', 'sugarPer100g'] }, egg];
+    const src = f.journal.saveMeal({ name: '早餐', day: '2026-11-04', time: '08:00', items }, { shareFoods: false });
+    return { f, src, toast: () => f.journal.foods().find(x => x.name === '吐司'), names: () => f.journal.foods().map(x => x.name).sort() };
+  };
+  const bump = m => ({ ...m, items: m.items.map(i => ({ ...i, grams: i.grams + 10 })) });
+  const a = await setup(); const before = a.names();
+  const copy = await (await a.f.request(`/api/meals/${a.src.id}/repeat`, {})).json();
+  assert.ok(copy.items.every(i => i.cache === false));
+  assert.equal((await a.f.request('/api/meals', bump(copy))).status, 200);
+  assert.deepEqual(a.names(), before); // 荷包蛋沒有被寫入
+  // 對照：直接編輯原餐點再存（荷包蛋 cache:true 會寫入）；命中的吐司兩邊結果相同。
+  const b = await setup();
+  assert.equal((await b.f.request('/api/meals', bump(b.f.journal.meal(b.src.id)))).status, 200);
+  assert.ok(b.names().includes('荷包蛋'));
+  const { id: _a, ...toastA } = a.toast(), { id: _b, ...toastB } = b.toast();
+  assert.deepEqual(toastA, toastB); assert.deepEqual(toastA.aliases, ['烤吐司']); assert.equal(toastA.fatPer100g, 4);
 });
 
 // 候選餐點（repeat-meals ticket 02）：GET /api/repeat-candidates；「現在」由 createApp 的 now 注入（2026-11-05 週四 13:00）。

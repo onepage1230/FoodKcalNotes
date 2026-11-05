@@ -40,6 +40,8 @@ export function validDate(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
     !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
 }
+// 餐點時間：HH:MM（24 小時制）。
+export const validTime = value => typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 export function safeUrl(value) {
   try { const url = new URL(value); return ['https:', 'http:'].includes(url.protocol) ? url.href : ''; } catch { return ''; }
 }
@@ -251,7 +253,7 @@ export function createJournal(filename, { foods: shared = null } = {}) {
   function dayNutrients(day) { return nutrientTotals(meals(day).flatMap(m => m.items)); }
   function meal(id) { const row = db.prepare('SELECT * FROM meals WHERE id=?').get(id); return row ? readMeal(row) : null; }
   function saveMeal(input, { shareFoods = true } = {}) {
-    if (!validDate(input.day) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(input.time)) throw bad('日期或時間不正確。');
+    if (!validDate(input.day) || !validTime(input.time)) throw bad('日期或時間不正確。');
     const items = validateItems(input.items); const photo = validPhoto(input.photo);
     const name = text(input.name, 120) || text(items.map(i => i.name).join('、'), 120);
     const id = text(input.id, 100) || randomUUID();
