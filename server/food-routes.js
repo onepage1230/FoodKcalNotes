@@ -60,6 +60,15 @@ export function attachFoodRoutes(app, { requireProvider, providerChain, running,
     streak: req.journal.streak(validDate(req.query.today) ? req.query.today : new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)) }));
   app.get('/api/meals/:id', (req, res) => { const meal = req.journal.meal(req.params.id); res.status(meal ? 200 : 404).json(meal || { error: '找不到餐點。' }); });
   app.post('/api/meals', (req, res) => res.json(req.journal.saveMeal(req.body, { shareFoods: shareFoods(req) })));
+  // 再記一次：由來源餐點建立「今天」的新餐點（日期、現在時間都用伺服器本地時間）；不複製照片與備註。
+  // 一律 shareFoods:false——不寫共用食物庫、不補營養素、不加別名（ADR 0004、0010、0011），與朋友是否開 FRIENDS_CACHE 無關。
+  app.post('/api/meals/:id/repeat', (req, res) => {
+    const source = req.journal.meal(req.params.id); if (!source) return res.status(404).json({ error: '找不到餐點。' });
+    const at = new Date(), pad = n => String(n).padStart(2, '0'), time = req.body?.time === undefined ? `${pad(at.getHours())}:${pad(at.getMinutes())}` : req.body.time;
+    if (typeof time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return res.status(400).json({ error: '時間格式不正確，請使用 HH:MM。' });
+    res.json(req.journal.saveMeal({ name: source.name, day: `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`, time,
+      items: source.items.map(({ id, ...item }) => item) }, { shareFoods: false }));
+  });
   app.delete('/api/meals/:id', (req, res) => { req.journal.deleteMeal(req.params.id); res.json({ ok: true }); });
   app.post('/api/settings', (req, res) => res.json(req.journal.updatePreferences(req.body)));
   app.get('/api/foods', (req, res) => res.json({ foods: req.journal.foods(typeof req.query.q === 'string' ? req.query.q : '') }));
