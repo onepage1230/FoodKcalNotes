@@ -294,3 +294,27 @@ test('計劃卡片的計劃線與趨勢圖同源：planProgress.line 等於 plan
   assert.equal(p.line, Math.round(planLineAt(planLineSpec(planContext(started, 85), 1500), '2026-11-26') * 10) / 10);
   assert.equal(p.line, 86.7); // 90 − 0.41 × 56 ÷ 7 = 86.72
 });
+
+// ---- review T1／P2：趨勢圖與計劃卡片用同一個計劃線函式（plan-line.js），逐日對照 planProgress ----
+import { planLineKg } from '../client/plan-line.js';
+import { dayIndex } from '../client/dates.js';
+import { planTrendNote } from '../client/plan.js';
+test('計劃線同源：圖用的 planLineKg 與 planProgress 的 line／diff 在第 0、7、14、到達日、到達日後一天完全相等', () => {
+  const plan = { ...started, target: 88 }, planLine = planLineSpec(planContext(plan), 1500); // weekly 0.41，第 34.15 天到達 88
+  assert.deepEqual(planLine, { startDay: '2026-10-01', startKg: 90, targetKg: 88, weekly: 0.41 });
+  const r1 = n => Math.round(n * 10) / 10;
+  for (const [day, line, diff] of [['2026-10-01', 90, -0.5], ['2026-10-08', 89.6, -0.1], ['2026-10-15', 89.2, 0.3], ['2026-11-04', 88, 1.5], ['2026-11-05', 88, 1.5]]) { // 11/04 = 第 34 天（88.0086），11/05 已過到達日
+    const p = planProgress(planContext(plan, 89.5), 1500, day, nov26), exact = planLineKg(planLine, dayIndex(day));
+    assert.deepEqual([p.line, p.diff], [line, diff], day);
+    assert.deepEqual([r1(exact), r1(89.5 - exact)], [p.line, p.diff], day);
+    assert.equal(exact, planLineAt(planLine, day), day);
+  }
+  assert.equal(planLineKg(planLine, dayIndex('2026-10-01') + 2 / 0.41 * 7), 88); // 剛好到達日
+});
+test('趨勢圖摘要的計劃句：與計劃卡片同一組數字（預計達成日、實際比計劃線高／低）；已達成或沒有計劃線時沒有', () => {
+  const p = planProgress(planContext(started, 85), 1500, '2026-11-26', nov26);
+  assert.equal(planTrendNote(p), '計劃線：預計 2028.02.26 達成；實際比計劃線低 1.7 公斤');
+  assert.equal(planTrendNote(planProgress(planContext(started, 91), 1500, '2026-11-26', nov26)), '計劃線：預計 2028.02.26 達成；實際比計劃線高 4.3 公斤'); // 91 − 86.72
+  assert.equal(planTrendNote(planProgress(planContext(started, 55), 1500, '2026-11-26', nov26)), null); // 已達成
+  assert.equal(planTrendNote(planProgress(planContext(started, 85), 2000, '2026-11-26', nov26)), null); // 不會減重，沒有計劃線
+});

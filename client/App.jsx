@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Admin from './Admin.jsx';
-import { planProgress, planLineSpec, planToSave, restartPlan, effectiveStartGoal, planSummary, planPreviewText, planSaveNote } from './plan.js';
+import { planProgress, planLineSpec, planToSave, restartPlan, effectiveStartGoal, planSummary, planTrendNote, planPreviewText, planSaveNote } from './plan.js';
 import { planContext } from './plan-context.js';
 import { latest } from './latest.js';
 import { WEIGHT_MIN, WEIGHT_MAX } from './weight.js';
@@ -239,6 +239,7 @@ export default function App() {
   // 有紀錄時表單的「目前體重」固定是最新紀錄（唯讀）；儲存時 planToSave 決定真正的起始體重與開始日。
   const planInput=planForm?{...planForm,...(recordKg!=null&&{weight:String(recordKg)})}:Object.fromEntries(Object.entries({sex:'f',activity:1.2,age:'',height:'',weight:'',target:'',...savedPlan,...(recordKg!=null&&{weight:recordKg})}).map(([k,v])=>[k,String(v)]));
   const savedCtx=planContext(settings.plan,currentKg); // 已存計劃＋目前體重（載入前 currentKg 是 undefined，退回計劃體重）；計劃卡片與營養目標共用
+  const weightPlanLine=planLineSpec(savedCtx,settings.goal), weightPlanNote=weightPlanLine&&recordDay?planTrendNote(planProgress(savedCtx,settings.goal,recordDay)):null; // 體重卡片的趨勢圖：計劃線與摘要的計劃句（與計劃卡片同一組數字，不受計劃表單編輯影響）
   const saved=!planForm&&settings.plan&&planProgress(savedCtx,settings.goal,recordDay);
   const card=saved&&planSummary({progress:saved,ctx:savedCtx,goal:settings.goal,recordDay}); // 計劃卡片的狀態與文案
   const editPlan=patch=>setPlanForm({...planInput,...patch});
@@ -322,7 +323,7 @@ export default function App() {
           {p.models?.length>0&&<label>模型<select value={p.model||''} onChange={e=>editProvider(p.id,{model:e.target.value})}>{p.models.map(m=><option key={m.slug} value={m.slug}>{m.display_name||m.slug}</option>)}</select></label>}</>}</div>;})}
         <p className="muted tiny">依序使用已啟用的服務；前一個額度用完、登入失效或連線失敗時自動改用下一個。登入資料與 API key 加密保存在這台電腦，只能在電腦上管理。Claude API 依用量計費。</p></>}</section>
       <section className="card"><h2>每日熱量目標</h2><div className="goal-control"><button className="round" onClick={()=>commitGoal(Math.max(500,(Number(goalInput)||settings.goal)-50))}>−</button><input aria-label="每日熱量目標" type="text" inputMode="numeric" value={goalInput} onChange={e=>setGoalInput(e.target.value)} onBlur={()=>commitGoal(goalInput)} onKeyDown={e=>{if(e.key==='Enter')e.currentTarget.blur();}}/><button className="round" onClick={()=>commitGoal(Math.min(10000,(Number(goalInput)||settings.goal)+50))}>+</button></div></section>
-      <WeightCard api={api} notify={notify} onError={setError} today={today} data={weightData} planLine={planLineSpec(savedCtx,settings.goal)} onChange={d=>{weightSeq.begin();setWeightData(d);}}/>
+      <WeightCard api={api} notify={notify} onError={setError} today={today} data={weightData} planLine={weightPlanLine} planNote={weightPlanNote} onChange={d=>{weightSeq.begin();setWeightData(d);}}/>
       <section className="card">{saved?<><h2>減重計劃</h2>
         {/* 倒數、預計達成日與計劃線屬於「原計劃」（起始體重、開始日、起點每日目標，固定）；TDEE、每週減重量、「不會再減重」與最低攝取是「依目前體重與目前每日目標」的即時資訊，兩者分開寫明。達成後不顯示倒數。 */}
         <div className="detail-total">{card.headline}{card.showDays&&<small> 天</small>}</div>

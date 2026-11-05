@@ -1,7 +1,8 @@
 // 減重目標：Mifflin-St Jeor 估算 BMR/TDEE，以每日目標 goal 推算每週減重 weekly 與預計達成日
 // （1 kg 脂肪 ≈ 7700 kcal）；total 為整個計劃的天數。
 import { assertPlanContext } from './plan-context.js';
-import { dayIndex } from './weight.js';
+import { dayIndex } from './dates.js';
+import { planLineKg } from './plan-line.js';
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 // ctx 是 planContext(plan, current)：目前體重用於 BMR、TDEE、最低攝取與每週減重量；沒有目前體重時 planContext 已退回計劃體重。
@@ -56,14 +57,14 @@ export function planLineSpec(ctx, goal) {
   const weekly = startWeekly(plan, goal);
   return weekly ? { startDay: plan.startDate, startKg: plan.weight, targetKg: plan.target, weekly } : null;
 }
-// 某一天的計劃線體重（精確值，不四捨五入）：開始日之前取起始體重，到達目標後固定為目標。
-export const planLineAt = (spec, day) => Math.max(spec.targetKg, spec.startKg - spec.weekly * Math.max(0, dayIndex(day) - dayIndex(spec.startDay)) / 7);
+// 某一天的計劃線體重（精確值，不四捨五入）：核心算法在 plan-line.js，趨勢圖共用。
+export const planLineAt = (planLine, day) => planLineKg(planLine, dayIndex(day));
 export function planProgress(ctx, goal, recordDay, today = new Date()) {
   const { plan, current } = assertPlanContext('planProgress', ctx), g = planGoal(ctx, goal, today), lose = plan.weight - plan.target;
   const kg = recordDay ? current : plan.weight;
-  const spec = recordDay ? planLineSpec(ctx, goal) : null;
+  const planLine = recordDay ? planLineSpec(ctx, goal) : null;
   let line = null, diff = null;
-  if (spec) { const exact = planLineAt(spec, recordDay); line = round1(exact); diff = round1(kg - exact); }
+  if (planLine) { const exact = planLineAt(planLine, recordDay); line = round1(exact); diff = round1(kg - exact); }
   // 達成判定每次即時看最新體重（沒有紀錄時看起始體重），不鎖定。
   if (kg <= plan.target) return { ...g, reached: true, pct: 100, line, diff };
   // 沒有紀錄時沿用以天數計算的舊進度（升級後不跳變）；起始體重不高於目標（lose ≤ 0）而目前高於目標時為 0，不除以 0。
@@ -78,6 +79,14 @@ export function planProgress(ctx, goal, recordDay, today = new Date()) {
 // notes（提醒，tone：plain／muted／notice）、basis（依目前設定的 BMR／TDEE）、original（原計劃一行，舊計劃標明隨目前每日目標）。
 const fmt = n => Math.round(n).toLocaleString('en-US');
 const dot = s => s.replace(/-/g, '.');
+const diffText = p => p.diff === 0 ? '實際與計劃線相同' : `實際比計劃線${p.diff > 0 ? '高' : '低'} ${Math.abs(p.diff).toFixed(1)} 公斤`; // 計劃卡片與趨勢圖摘要共用
+// 趨勢圖摘要的計劃句（與計劃卡片同一組數字）；已達成、沒有計劃線或沒有預計達成日的部分不提，什麼都沒有為 null。
+export function planTrendNote(p) {
+  const parts = [];
+  if (!p.reached && p.total > 0) parts.push(`預計 ${dot(p.date)} 達成`);
+  if (!p.reached && p.diff !== null) parts.push(diffText(p));
+  return parts.length ? `計劃線：${parts.join('；')}` : null;
+}
 export function planSummary({ progress: p, ctx, goal, recordDay }) {
   const { plan, current } = assertPlanContext('planSummary', ctx);
   const state = p.reached ? 'reached' : p.days === null ? 'noLoss' : p.days === 0 ? (p.total ? 'due' : 'regrown') : 'active';
@@ -86,14 +95,13 @@ export function planSummary({ progress: p, ctx, goal, recordDay }) {
   if (state === 'regrown') notes.push({ tone: 'muted', text: '起始體重已不高於目標，可按「重新開始計劃」重設起點。' });
   if (!p.reached && p.total > 0 && p.weekly === 0) notes.push({ tone: 'notice', text: `照目前設定（${current} 公斤、每日 ${fmt(goal)} kcal）不會再減重；預計達成日是原計劃的推算。` });
   if (!p.reached && goal < p.floor) notes.push({ tone: 'notice', text: `每日目標低於建議最低攝取 ${fmt(p.floor)} kcal，長期可能流失肌肉、代謝下降` });
-  const dir = p.diff > 0 ? '高' : '低';
   return {
     state,
     headline: state === 'reached' ? '已達成目標' : state === 'due' ? '已到預計日期，請更新體重' : state === 'active' ? p.days : '—',
     showDays: state === 'active',
     summary: state === 'reached' ? `目前體重 ${current} 公斤，已達到目標 ${plan.target} 公斤` : p.total > 0 ? `原計劃預計 ${dot(p.date)} 達成 · ${p.pct}% 已完成` : null,
     pct: !p.reached && p.total > 0 ? p.pct : null,
-    diff: !p.reached && p.diff !== null ? { text: p.diff === 0 ? '實際與計劃線相同' : `實際比計劃線${dir} ${Math.abs(p.diff).toFixed(1)} 公斤`, note: `（${dot(recordDay)} 計劃線 ${p.line} 公斤）` } : null,
+    diff: !p.reached && p.diff !== null ? { text: diffText(p), note: `（${dot(recordDay)} 計劃線 ${p.line} 公斤）` } : null,
     notes,
     basis: `依目前設定（體重 ${current} 公斤）：基礎代謝 ${fmt(p.bmr)}、每日消耗約 ${fmt(p.tdee)} kcal${p.reached ? '（維持體重約需此熱量）' : p.weekly > 0 ? `，以目前每日目標 ${fmt(goal)} kcal 每週約減 ${p.weekly} 公斤` : ''}`,
     original: `原計劃：起始 ${plan.weight} 公斤${plan.startDate ? `（${dot(plan.startDate)} 開始）` : ''} → 目標 ${plan.target} 公斤 · 每日 ${fmt(effectiveStartGoal(plan, goal))} kcal${plan.startGoal === undefined ? '（舊計劃：隨目前每日目標）' : ''}`,
