@@ -78,12 +78,12 @@ export function attachFoodRoutes(app, { requireProvider, providerChain, running,
     const at = now(); res.json({ candidates: repeatCandidates(req.journal.mealsSince(shiftDay(localDay(at), -RANGE_DAYS)), at) });
   });
   // 體重紀錄：每本日誌各自一份；不得記未來的日子（以注入的 now 決定今天）。
-  app.get('/api/weights', (req, res) => res.json({ weights: req.journal.weights(), current: req.journal.currentWeight() }));
+  app.get('/api/weights', (req, res) => res.json(req.journal.weightState()));
   app.put('/api/weights/:day', (req, res) => {
     if (validDate(req.params.day) && req.params.day > localDay(now())) return res.status(400).json({ error: '不能記錄未來的日期。' });
-    req.journal.setWeight(req.params.day, req.body?.kg); res.json({ weights: req.journal.weights(), current: req.journal.currentWeight() });
+    req.journal.setWeight(req.params.day, req.body?.kg); res.json(req.journal.weightState());
   });
-  app.delete('/api/weights/:day', (req, res) => { req.journal.deleteWeight(req.params.day); res.json({ weights: req.journal.weights(), current: req.journal.currentWeight() }); });
+  app.delete('/api/weights/:day', (req, res) => { req.journal.deleteWeight(req.params.day); res.json(req.journal.weightState()); });
   app.delete('/api/meals/:id', (req, res) => { req.journal.deleteMeal(req.params.id); res.json({ ok: true }); });
   app.post('/api/settings', (req, res) => res.json(req.journal.updatePreferences(req.body)));
   app.get('/api/foods', (req, res) => res.json({ foods: req.journal.foods(typeof req.query.q === 'string' ? req.query.q : '') }));

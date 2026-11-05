@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Admin from './Admin.jsx';
 import { planGoal } from './plan.js';
-import { daysSinceWeight, STALE_DAYS } from './weight.js';
+import { WEIGHT_MIN, WEIGHT_MAX } from './weight.js';
+import WeightCard from './WeightCard.jsx';
 import { NUTRIENT_GOALS, nutrientGoals, goalStatus, GOAL_STATUS_TEXT } from './nutrient-goals.js';
 import { NUTRIENTS, nutrientValue, nutrientTotals, kcalMismatch } from './nutrients.js';
 import { showCandidates } from './candidate-view.js';
@@ -80,7 +81,6 @@ export default function App() {
   const [busy,setBusy]=useState(false); const [jobId,setJobId]=useState(null); const [jobs,setJobs]=useState([]); const [jobsOpen,setJobsOpen]=useState(false); const [saving,setSaving]=useState(false); const [repeating,setRepeating]=useState(false); const [error,setError]=useState(''); const [toast,setToast]=useState('');
   const [foods,setFoods]=useState([]); const [query,setQuery]=useState(''); const [group,setGroup]=useState('全部'); const [picking,setPicking]=useState(false);
   const [providers,setProviders]=useState([]); const [claudeKey,setClaudeKey]=useState(null); // null：key 輸入框收起
-  const [weights,setWeights]=useState(null); const [weightForm,setWeightForm]=useState({day:'',kg:''}); // 體重卡片：weights = {weights, current}；weightForm.day 空字串 = 今天
   const [goalInput,setGoalInput]=useState('1800'); const [planForm,setPlanForm]=useState(null); const [planStep,setPlanStep]=useState(1); const [goalEdit,setGoalEdit]=useState(null);
   const [theme,setTheme]=useState(()=>{try{const v=localStorage.getItem('theme');return v==='light'||v==='dark'?v:'system';}catch{return 'system';}});
   const album=useRef(null); const threadEnd=useRef(null); const pane=useRef(null); const drag=useRef(null); const lastInput=useRef(null);
@@ -98,10 +98,6 @@ export default function App() {
     return data;
   }
   const notify=message=>{setToast(message);};
-  useEffect(()=>{if(screen!=='settings')return;api('/api/weights').then(setWeights).catch(e=>setError(e.message));},[screen]);
-  const weightDay=weightForm.day||today(), weightKg=Number(weightForm.kg), weightOk=/^\d+(\.\d+)?$/.test(weightForm.kg.trim())&&weightKg>=25&&weightKg<=300&&weightDay<=today();
-  async function saveWeight(){try{setWeights(await api('/api/weights/'+weightDay,{kg:weightKg},'PUT'));setWeightForm({day:'',kg:''});notify('體重已記錄');}catch(e){setError(e.message);}}
-  async function removeWeight(day){if(!window.confirm(`刪除 ${day.replace(/-/g,'.')} 的體重紀錄？`))return;try{setWeights(await api('/api/weights/'+day,undefined,'DELETE'));notify('已刪除');}catch(e){setError(e.message);}}
   useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(''),3500);return()=>clearTimeout(t);},[toast]);
   // 候選餐點只屬於今天：每次載入今天的日誌（記完、刪除、換日都會呼叫 loadJournal）就重新取得；失敗只是不顯示。
   // 遞增序號：只採用最後一次送出的回應，避免較早的回應較晚抵達、把剛記過的候選又顯示出來；內容相同就沿用舊陣列，不重畫。
@@ -238,7 +234,7 @@ export default function App() {
   const editPlan=patch=>setPlanForm({...planInput,...patch});
   const planNums=Object.fromEntries(Object.entries(planInput).map(([k,v])=>[k,k==='sex'?v:Number(v)]));
   const plan=Object.values(planNums).every(v=>typeof v==='string'||v>0)?planGoal(planNums,settings.goal):null;
-  const bodyOk=Number.isInteger(planNums.age)&&[['age',10,100],['height',100,230],['weight',25,300],['target',25,300]].every(([k,lo,hi])=>planNums[k]>=lo&&planNums[k]<=hi); // 同 server validPlan 範圍
+  const bodyOk=Number.isInteger(planNums.age)&&[['age',10,100],['height',100,230],['weight',WEIGHT_MIN,WEIGHT_MAX],['target',WEIGHT_MIN,WEIGHT_MAX]].every(([k,lo,hi])=>planNums[k]>=lo&&planNums[k]<=hi); // 同 server validPlan 範圍
   // 營養目標：建議值依已存計劃與每日熱量目標即時計算；goalEdit 是正在覆寫的項目（輸入字串）。
   const goals=nutrientGoals(settings.plan,settings.goal,settings.nutrientGoals||{});
   function saveNutrientGoal(){const {key,...input}=goalEdit;const value=Object.fromEntries(Object.entries(input).map(([k,v])=>[k,String(v).trim()===''?NaN:Number(v)]));changeSetting({nutrientGoals:{[key]:value}},'營養目標已保存').then(ok=>ok&&setGoalEdit(null));}
@@ -309,13 +305,7 @@ export default function App() {
           {p.models?.length>0&&<label>模型<select value={p.model||''} onChange={e=>editProvider(p.id,{model:e.target.value})}>{p.models.map(m=><option key={m.slug} value={m.slug}>{m.display_name||m.slug}</option>)}</select></label>}</>}</div>;})}
         <p className="muted tiny">依序使用已啟用的服務；前一個額度用完、登入失效或連線失敗時自動改用下一個。登入資料與 API key 加密保存在這台電腦，只能在電腦上管理。Claude API 依用量計費。</p></>}</section>
       <section className="card"><h2>每日熱量目標</h2><div className="goal-control"><button className="round" onClick={()=>commitGoal(Math.max(500,(Number(goalInput)||settings.goal)-50))}>−</button><input aria-label="每日熱量目標" type="text" inputMode="numeric" value={goalInput} onChange={e=>setGoalInput(e.target.value)} onBlur={()=>commitGoal(goalInput)} onKeyDown={e=>{if(e.key==='Enter')e.currentTarget.blur();}}/><button className="round" onClick={()=>commitGoal(Math.min(10000,(Number(goalInput)||settings.goal)+50))}>+</button></div></section>
-      <section className="card weight-card"><h2>體重</h2>{weights&&(()=>{const list=weights.weights,last=list.at(-1)?.day,since=daysSinceWeight(last,today());return<>
-        <div className="detail-total">{weights.current?weights.current.kg:'—'}{weights.current&&<small> 公斤</small>}</div>
-        <p className={since>STALE_DAYS?'notice':'muted'}>{since===null?'還沒有體重紀錄，從今天開始記吧。':since===0?'今天已記錄':`距離上次紀錄 ${since} 天`}{weights.current?.source==='plan'&&'（目前是減重計劃填的體重）'}</p>
-        <div className="two-columns"><label>日期<input type="date" max={today()} value={weightDay} onChange={e=>setWeightForm({...weightForm,day:e.target.value})}/></label><label>體重 kg<input type="text" inputMode="decimal" value={weightForm.kg} onChange={e=>setWeightForm({...weightForm,kg:e.target.value})}/></label></div>
-        <button className="primary full" disabled={!weightOk} onClick={saveWeight}>記錄</button>
-        {list.length>0&&<div className="weight-list">{[...list].reverse().map(w=><div className="weight-row" key={w.day}><button className="text-button" onClick={()=>setWeightForm({day:w.day,kg:String(w.kg)})}>{w.day.replace(/-/g,'.')} · {w.kg} 公斤</button><button className="text-button danger" onClick={()=>removeWeight(w.day)}>刪除</button></div>)}</div>}
-        <p className="muted tiny">同一天再記會覆蓋；點一筆紀錄可帶入上方修改，也可補記過去的日期。</p></>;})()}</section>
+      <WeightCard api={api} notify={notify} onError={setError} today={today} planWeight={settings.plan?.weight}/>
       <section className="card">{saved?<><h2>減重計劃</h2><div className="detail-total">{saved.days===0?(saved.total?'已到預計日期，請更新體重':'已達成目標'):saved.days===null?'—':saved.days}{saved.days>0&&<small> 天</small>}</div>
         {saved.total>0&&<><p>預計 {saved.date.replace(/-/g,'.')} 達成 · {planPct}% 已完成</p><div className="progress"><i style={{width:planPct+'%',background:'var(--purple)'}}/></div></>}
         {saved.days===null&&<p>以目前每日目標 {fmt(settings.goal)} kcal 不會減重</p>}{settings.plan.weight>settings.plan.target&&settings.goal<saved.floor&&<p className="notice">每日目標低於建議最低攝取 {fmt(saved.floor)} kcal，長期可能流失肌肉、代謝下降</p>}

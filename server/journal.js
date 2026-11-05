@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { NUTRIENTS, NUTRIENT_KEYS, nutrientTotals } from '../client/nutrients.js';
 import { NUTRIENT_GOALS } from '../client/nutrient-goals.js';
+import { WEIGHT_MIN, WEIGHT_MAX } from '../client/weight.js';
 
 export const normalize = value => String(value).normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
 export const kcal = item => Math.round(item.grams * item.kcalPer100g / 100);
@@ -87,7 +88,7 @@ export function validateItems(items) {
 function validPlan(p) {
   const num = (v, lo, hi) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
   if (!p || !['f', 'm'].includes(p.sex) || !Number.isInteger(p.age) || !num(p.age, 10, 100) || !num(p.height, 100, 230)
-    || !num(p.weight, 25, 300) || !num(p.target, 25, 300) || ![1.2, 1.375, 1.55, 1.725].includes(p.activity))
+    || !num(p.weight, WEIGHT_MIN, WEIGHT_MAX) || !num(p.target, WEIGHT_MIN, WEIGHT_MAX) || ![1.2, 1.375, 1.55, 1.725].includes(p.activity))
     throw bad('減重目標資料不正確，請檢查性別、年齡、身高、體重、目標與活動量。');
   const now = new Date(); const today = new Date(now - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   if (p.startDate !== undefined && (!validDate(p.startDate) || p.startDate > today)) throw bad('計劃開始日期不正確。');
@@ -240,7 +241,7 @@ export function createJournal(filename, { foods: shared = null } = {}) {
   const weights = () => db.prepare('SELECT day,kg FROM weights ORDER BY day').all().map(r => ({ day: r.day, kg: r.kg }));
   function setWeight(day, kg) {
     if (!validDate(day)) throw bad('日期格式不正確。');
-    if (typeof kg !== 'number' || !Number.isFinite(kg) || kg < 25 || kg > 300) throw bad('體重不正確，請輸入 25–300 公斤。');
+    if (typeof kg !== 'number' || !Number.isFinite(kg) || kg < WEIGHT_MIN || kg > WEIGHT_MAX) throw bad(`體重不正確，請輸入 ${WEIGHT_MIN}–${WEIGHT_MAX} 公斤。`);
     const value = Math.round(kg * 10) / 10;
     db.prepare('INSERT INTO weights VALUES(?,?) ON CONFLICT(day) DO UPDATE SET kg=excluded.kg').run(day, value);
     return { day, kg: value };
@@ -253,6 +254,7 @@ export function createJournal(filename, { foods: shared = null } = {}) {
     const planned = preferences().plan?.weight;
     return typeof planned === 'number' ? { kg: planned, day: null, source: 'plan' } : null;
   }
+  const weightState = () => ({ weights: weights(), current: currentWeight() }); // 體重 API 共用的回應
   function readMeal(row, withPhoto = true) {
     const items = JSON.parse(row.items);
     return { id: row.id, day: row.day, time: row.time, name: row.name, items, kcal: items.reduce((s, i) => s + kcal(i), 0), nutrients: nutrientTotals(items),
@@ -344,7 +346,7 @@ export function createJournal(filename, { foods: shared = null } = {}) {
   };
   function getJob(id) { const row = db.prepare('SELECT * FROM jobs WHERE id=?').get(id); return row ? readJob(row, true) : null; }
   const deleteJob = id => db.prepare('DELETE FROM jobs WHERE id=?').run(id).changes;
-  return { close: () => db.close(), getMeta, setMeta, stats, recentMeals, ...library, preferences, updatePreferences, weights, setWeight, deleteWeight, currentWeight, meals, mealsSince, dayNutrients, meal, saveMeal, week, streak,
+  return { close: () => db.close(), getMeta, setMeta, stats, recentMeals, ...library, preferences, updatePreferences, weights, setWeight, deleteWeight, currentWeight, weightState, meals, mealsSince, dayNutrients, meal, saveMeal, week, streak,
     createJob, updateJob, listJobs, getJob, deleteJob,
     deleteMeal: id => { db.prepare("DELETE FROM jobs WHERE status='done' AND meal_id=?").run(id); return db.prepare('DELETE FROM meals WHERE id=?').run(id).changes; },
     exportData: () => ({ version: 1, settings: preferences(), weights: weights(), foods: library.foods(), meals: db.prepare('SELECT * FROM meals ORDER BY day,time').all().map(row => readMeal(row)) }),

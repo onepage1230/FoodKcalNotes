@@ -924,6 +924,7 @@ test('候選餐點：假日顯示最近吃過（含平日、只吃一次），�
 
 // 體重紀錄（weight-tracking ticket 01）：GET /api/weights、PUT/DELETE /api/weights/:day；「今天」由注入的 now 決定（2026-11-05）。
 const weightFixture = (t, extra) => fixture(t, { now: () => new Date(2026, 10, 5, 13, 0), ...extra });
+const foodsOf = f => f.journal.foods().map(({ id, name, kcalPer100g }) => ({ id, name, kcalPer100g }));
 const putWeight = (f, day, kg, extra) => f.request('/api/weights/' + day, { kg }, { method: 'PUT', ...extra });
 test('體重紀錄：記一筆後可讀回，目前體重取最新日期；同一天再記為覆蓋', async t => {
   const f = await weightFixture(t);
@@ -971,11 +972,24 @@ test('體重紀錄：記錄、刪除不改動減重計劃、每日熱量目標�
   const f = await weightFixture(t);
   const plan = { sex: 'f', age: 28, height: 165, weight: 60, target: 55, activity: 1.2, startDate: '2026-10-01' };
   const before = await (await f.request('/api/settings', { goal: 1500, plan })).json();
+  f.journal.saveMeal({ name: '早餐', day: '2026-11-05', time: '08:00', items: [{ name: '白飯', grams: 100, kcalPer100g: 130, source: 'web', sourceUrl: 'https://example.com/rice', sourceTitle: '白飯', cache: true }] });
+  const foodsBefore = foodsOf(f), streakOf = async () => (await (await f.request('/api/journal?day=2026-11-05&today=2026-11-05')).json()).streak;
+  assert.equal(foodsBefore.length, 1); assert.equal(await streakOf(), 1); // 前置：食物庫有內容、連勝成立
   await putWeight(f, '2026-11-05', 58.8); await putWeight(f, '2026-11-01', 59.5); await f.request('/api/weights/2026-11-01', null, { method: 'DELETE' });
   const settings = (await (await f.request('/api/journal?day=2026-11-05&today=2026-11-05')).json()).settings;
   assert.equal(settings.goal, 1500); assert.deepEqual(settings.plan, before.plan);
+  assert.deepEqual(foodsOf(f), foodsBefore); assert.equal(await streakOf(), 1); // 食物庫、連勝不變
   const exported = await (await f.request('/api/export')).json();
   assert.deepEqual(exported.weights, [{ day: '2026-11-05', kg: 58.8 }]);
+});
+test('體重紀錄：刪除壞日期或不存在的日期不報錯、不改動既有紀錄；沒有紀錄時匯出 weights 為空陣列', async t => {
+  const f = await weightFixture(t);
+  assert.deepEqual((await (await f.request('/api/export')).json()).weights, []);
+  await putWeight(f, '2026-11-05', 70);
+  for (const day of ['abc', '2026-02-30', '2026-11-04']) {
+    const res = await f.request('/api/weights/' + day, null, { method: 'DELETE' });
+    assert.equal(res.status, 200, day); assert.deepEqual((await res.json()).weights, [{ day: '2026-11-05', kg: 70 }]);
+  }
 });
 test('體重紀錄：朋友日誌各自一份，與主日誌互不可見', async t => {
   const f = await weightFixture(t, { chatgptShared: true });
