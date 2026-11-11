@@ -10,6 +10,7 @@ credentials.json.*.tmp
 *.sqlite-*
 start.local.bat
 master.key
+owner.token
 *.tmp
 .env.*
 !.env.example

@@ -98,6 +98,7 @@ export default function App() {
       headers:body!==undefined || method==='DELETE'?{'Content-Type':'application/json','X-CSRF-Token':csrf.current}:{},
       ...(body!==undefined?{body:JSON.stringify(body)}:{})});
     const data=await response.json();
+    if(data.pairing&&response.status===401){location.replace('/');throw new Error(data.error);} // 配對失效（換了配對碼）：回首頁顯示配對畫面
     if(!response.ok)throw new Error(data.error || `要求失敗 (${response.status})`);
     return data;
   }
@@ -359,7 +360,8 @@ export default function App() {
         <p className="muted tiny">建議值依衛福部國健署「國人膳食營養素參考攝取量」第八版與國民飲食指標，以目前體重與每日熱量目標計算；沒覆寫的項目會跟著自動更新。僅供參考，有健康狀況請諮詢醫師或營養師。</p></section>
       <section className="card"><h2>本機庫找不到時</h2><label className="radio"><input type="radio" name="fallback" checked={settings.fallback==='web'} onChange={()=>changeSetting({fallback:'web'})}/>先查網路，找不到再由 LLM 估算</label><label className="radio"><input type="radio" name="fallback" checked={settings.fallback==='llm'} onChange={()=>changeSetting({fallback:'llm'})}/>直接由 LLM 估算</label><p className="muted tiny">網路資料附來源；估算值會保留標記。記錄時，網路資料與營養標示會自動存入食物庫；LLM 估算不會自動存入。估算的營養素會帶「估」標記存入食物庫，之後有出處的資料會取代。</p></section>
       <section className="card"><h2>外觀</h2>{[['system','跟隨系統'],['light','淺色'],['dark','深色']].map(([value,label])=><label className="radio" key={value}><input type="radio" name="theme" checked={theme===value} onChange={()=>setTheme(value)}/>{label}</label>)}</section>
-      <section className="card"><button className="settings-link" onClick={()=>openFoods()}>本機食物資料庫 <span>›</span></button><a className="settings-link" href="/api/export" download>匯出日誌與食物備份 <span>↓</span></a><p className="muted tiny">日誌保存於這台電腦的 SQLite。照片會送至設定的 AI 服務（OpenAI 或 Anthropic）分析，網路搜尋只使用食物名稱及描述。</p></section><p className="version">Meal Journal Local · v2.0.0</p>
+      <section className="card"><button className="settings-link" onClick={()=>openFoods()}>本機食物資料庫 <span>›</span></button><a className="settings-link" href="/api/export" download>匯出日誌與食物備份 <span>↓</span></a><p className="muted tiny">日誌保存於這台電腦的 SQLite。照片會送至設定的 AI 服務（OpenAI 或 Anthropic）分析，網路搜尋只使用食物名稱及描述。</p></section>
+      {status?.ownerToken&&<section className="card"><h2>裝置配對</h2><p className="muted tiny">這個瀏覽器已用配對碼配對。取消後要重新輸入配對碼才能使用；其他裝置不受影響。</p><button className="outline danger full" onClick={()=>window.confirm('取消這個裝置的配對？')&&api('/api/unpair',{}).then(()=>location.replace('/'),e=>setError(e.message))}>取消這個裝置的配對</button></section>}<p className="version">Meal Journal Local · v2.0.0</p>
     </div></div>}
     {screen==='foods'&&<div className="screen">{back('本機食物庫',()=>setScreen(picking?'result':'settings'))}<div className="scroll page-pad"><input className="search" aria-label="搜尋食物" placeholder="搜尋食物名稱或別名" value={query} onChange={e=>setQuery(e.target.value)}/>
       {foods.length>0&&<div className="chips">{[['全部',foods.length],...groups].map(([g,n])=><button key={g} className={'outline'+(group===g?' on':'')} aria-pressed={group===g} onClick={()=>setGroup(g)}>{g} {n}</button>)}</div>}

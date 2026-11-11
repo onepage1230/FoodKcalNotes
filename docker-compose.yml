@@ -16,5 +16,6 @@ services:
       REMOTE_ORIGINS: ${REMOTE_ORIGINS}
       OWNER_LOGIN: ${OWNER_LOGIN}
       FRIENDS_DAILY_LIMIT: ${FRIENDS_DAILY_LIMIT:-30}   # 其他 Tailscale 身分每天的 AI 分析次數，0 不限
+      OWNER_TOKEN: ${OWNER_TOKEN:-1}   # 擁有者必須用配對碼配對過的瀏覽器；host 網路上的其他程式拿不到主日誌。配對碼見 docker-compose logs
     volumes:
       - ${DATA_DIR:-./data-store}:/data

@@ -8,5 +8,6 @@ dist
 *.sqlite-*
 credentials.json
 master.key
+owner.token
 docs
 tests

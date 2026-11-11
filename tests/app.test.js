@@ -6,10 +6,11 @@ import { createApp, allowedModel, contentSecurityPolicy } from '../server/app.js
 import { verifyIdentity, ISSUER } from '../server/oauth.js';
 import { readSSE } from '../server/sse.js';
 import { createJournal } from '../server/journal.js';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { loadOwnerToken } from '../server/storage.js';
 
 async function fixture(t, extra = {}) {
   const account = { client_id: 'oaiapp_test', subject: 'user-1', access_token: 'old-test-token',
@@ -1125,4 +1126,142 @@ test('session 依身分記帳：朋友重複開首頁不會擠掉擁有者的 se
   assert.equal((await status(first)).status, 401); // 朋友最舊的已被淘汰
   const other = await open('other@example.com');
   assert.equal((await status(other)).status, 401); // 不同身分不能沿用別人的 session
+});
+
+// 擁有者 token（OWNER_TOKEN）：fixture 預設關閉；以下測試開啟後，以 paired() 配對並重新開首頁取得擁有者 session。
+const OWNER = 'A'.repeat(21) + '-_' + 'z'.repeat(20); // 43 字元 base64url
+const tsRemote = login => ({ Host: 'pc.example.ts.net', Origin: 'https://pc.example.ts.net', 'Tailscale-User-Login': login });
+const setCookie = res => res.headers.get('set-cookie') || '';
+// 用新的未配對 session 配對，再帶 owner_token 重新開首頁，回傳之後要求要用的 cookie 與 CSRF 標頭。
+async function paired(f, token = OWNER, base = {}) {
+  const fresh = setCookie(await f.request('/', undefined, { ...base, cookie: '' })).split(';')[0];
+  const { csrf: pairCsrf } = await (await f.request('/api/status', undefined, { ...base, cookie: fresh })).json();
+  const res = await f.request('/api/pair', { token }, { ...base, cookie: fresh, 'X-CSRF-Token': pairCsrf });
+  assert.equal(res.status, 200, await res.clone().text());
+  const owner = setCookie(res).split(';')[0];
+  const session = setCookie(await f.request('/', undefined, { ...base, cookie: owner })).split(';')[0];
+  const cookie = `${session}; ${owner}`;
+  const { csrf } = await (await f.request('/api/status', undefined, { ...base, cookie })).json();
+  return { ...base, cookie, 'X-CSRF-Token': csrf };
+}
+const day = '2026-10-02', meal = { name: '主日誌午餐', day, time: '12:00', photo: '', items: [{ name: '飯', grams: 100, kcalPer100g: 130, source: 'manual' }] };
+
+test('OWNER_TOKEN：本機未配對只能開首頁、精簡狀態與配對；其他 API 與登入一律 401（含大小寫變形）', async t => {
+  const f = await fixture(t, { ownerToken: OWNER });
+  assert.equal((await f.request('/')).status, 200);
+  const status = await (await f.request('/api/status')).json();
+  assert.deepEqual(Object.keys(status).sort(), ['csrf', 'pairing', 'remote']); assert.equal(status.pairing, true);
+  for (const path of [`/api/journal?day=${day}`, '/api/export', '/api/providers', '/api/admin/journals', '/api/models', '/API/Journal/', '/api/foods', '/auth/callback?state=x&code=y']) {
+    const res = await f.request(path);
+    assert.equal(res.status, 401, path); assert.equal((await res.json()).pairing, true, path);
+  }
+  for (const path of ['/api/meals', '/api/settings', '/auth/chatgpt', '/api/logout', '/api/unpair']) assert.equal((await f.request(path, path === '/api/meals' ? meal : {})).status, 401, path);
+  assert.equal(f.journal.meals(day).length, 0);
+});
+test('OWNER_TOKEN：錯誤配對碼 403，一分鐘內失敗 5 次後 429（正確的也先拒絕），時間過了才恢復；朋友不能配對也不計次', async t => {
+  let clock = Date.parse('2026-10-02T12:00:00Z');
+  const f = await fixture(t, { ownerToken: OWNER, now: () => new Date(clock) });
+  for (let i = 0; i < 3; i++) assert.equal((await f.request('/api/pair', { token: 'B'.repeat(43) }, tsRemote('friend@example.com'))).status, 403);
+  for (const token of ['wrong', OWNER.slice(0, -1) + 'y', '', 'x'.repeat(500), 42]) {
+    const res = await f.request('/api/pair', { token });
+    assert.equal(res.status, 403); assert.equal(setCookie(res), '');
+  }
+  assert.equal((await f.request('/api/pair', { token: 'wrong' })).status, 429);
+  assert.equal((await f.request('/api/pair', { token: OWNER })).status, 429);
+  assert.equal((await f.request('/api/pair', { token: OWNER }, { 'X-CSRF-Token': 'wrong' })).status, 403); // 配對也要 CSRF
+  clock += 61_000;
+  assert.equal((await f.request('/api/pair', { token: OWNER })).status, 200);
+});
+test('OWNER_TOKEN：配對成功設 HttpOnly、SameSite=Lax 長效 cookie；換新 session 後本機 API 可用，舊 session 與只帶 session 都無效', async t => {
+  const f = await fixture(t, { ownerToken: OWNER });
+  const res = await f.request('/api/pair', { token: ` ${OWNER} ` });
+  const cookie = setCookie(res);
+  assert.match(cookie, new RegExp(`^owner_token=${OWNER};`)); assert.match(cookie, /HttpOnly/); assert.match(cookie, /SameSite=Lax/);
+  assert.match(cookie, /Path=\//); assert.match(cookie, /Max-Age=34560000/); assert.doesNotMatch(cookie, /Secure/);
+  assert.equal((await f.request('/api/status')).status, 401); // 配對前的 session 已刪除
+  const h = await paired(f);
+  const status = await (await f.request('/api/status', undefined, h)).json();
+  assert.equal(status.pairing, undefined); assert.equal(status.ownerToken, true); assert.equal(status.admin, true);
+  assert.equal((await f.request('/api/meals', meal, h)).status, 200);
+  assert.equal((await (await f.request(`/api/journal?day=${day}`, undefined, h)).json()).meals.length, 1);
+  for (const path of ['/api/export', '/api/providers', '/api/admin/journals']) assert.equal((await f.request(path, undefined, h)).status, 200, path);
+  const sessionOnly = { cookie: h.cookie.split('; ')[0], 'X-CSRF-Token': h['X-CSRF-Token'] };
+  assert.equal((await f.request(`/api/journal?day=${day}`, undefined, sessionOnly)).status, 401);
+  assert.equal((await f.request('/api/export', undefined, { ...sessionOnly, cookie: `${sessionOnly.cookie}; owner_token=${'B'.repeat(43)}` })).status, 401);
+  // 大量未配對的首頁要求不會擠掉擁有者的 session
+  for (let i = 0; i < 25; i++) await f.request('/', undefined, { cookie: '' });
+  assert.equal((await f.request('/api/status', undefined, h)).status, 200);
+});
+test('OWNER_TOKEN：偽造遠端擁有者（ts.net Host + OWNER_LOGIN）沒有 owner cookie 讀不到主日誌；帶有效 cookie 的遠端擁有者可用', async t => {
+  const f = await fixture(t, { ownerToken: OWNER });
+  const local = await paired(f);
+  assert.equal((await f.request('/api/meals', meal, local)).status, 200);
+  const forged = tsRemote('owner@example.com');
+  for (const path of [`/api/journal?day=${day}`, '/api/export', `/api/meals/${f.journal.meals(day)[0].id}`]) assert.equal((await f.request(path, undefined, forged)).status, 401, path);
+  assert.equal((await f.request('/api/meals', meal, forged)).status, 401);
+  const status = await (await f.request('/api/status', undefined, forged)).json();
+  assert.equal(status.pairing, true); assert.equal(status.remote, true); assert.equal(status.user, undefined);
+  // 偷用本機擁有者的 session 也不行：身分不符的 session 一律無效
+  assert.equal((await f.request(`/api/journal?day=${day}`, undefined, { ...forged, cookie: local.cookie.split('; ')[0] })).status, 401);
+  const pair = await f.request('/api/pair', { token: OWNER }, forged);
+  assert.match(setCookie(pair), /Secure/); assert.match(setCookie(pair), /SameSite=Lax/);
+  const remote = await paired(f, OWNER, forged);
+  assert.equal((await (await f.request(`/api/journal?day=${day}`, undefined, remote)).json()).meals.length, 1);
+  assert.equal((await f.request('/api/export', undefined, remote)).status, 200);
+  assert.equal((await f.request('/api/providers', undefined, remote)).status, 403); // 遠端限制照舊
+  assert.equal((await f.request('/api/journal', undefined, { ...remote, 'Tailscale-User-Login': 'friend@example.com' })).status, 401); // owner cookie 不能借給別的身分的 session
+});
+test('OWNER_TOKEN：朋友不需配對，沒有 owner cookie 也能用自己的日誌；帶 owner cookie 仍是朋友、看不到主日誌', async t => {
+  const f = await fixture(t, { ownerToken: OWNER });
+  const local = await paired(f);
+  assert.equal((await f.request('/api/meals', meal, local)).status, 200);
+  const friend = tsRemote('friend@example.com');
+  assert.equal((await f.request('/api/meals', { ...meal, name: '朋友午餐' }, friend)).status, 200);
+  assert.deepEqual((await (await f.request(`/api/journal?day=${day}`, undefined, friend)).json()).meals.map(m => m.name), ['朋友午餐']);
+  const status = await (await f.request('/api/status', undefined, friend)).json();
+  assert.equal(status.pairing, undefined); assert.equal(status.ownerToken, false);
+  const session = setCookie(await f.request('/', undefined, { ...friend, cookie: `owner_token=${OWNER}` })).split(';')[0];
+  const withToken = { ...friend, cookie: `${session}; owner_token=${OWNER}` };
+  assert.deepEqual((await (await f.request(`/api/journal?day=${day}`, undefined, withToken)).json()).meals.map(m => m.name), ['朋友午餐']);
+});
+test('OWNER_TOKEN：/auth/callback 從 OpenAI 跨站導回時帶 owner cookie 可完成登入；沒有 owner cookie 不交換 code', async t => {
+  const f = await fixture(t, { ownerToken: OWNER });
+  const h = await paired(f);
+  const navigation = { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' };
+  assert.equal((await f.request('/auth/chatgpt', { client_id: 'oaiapp_test' }, h)).status, 303);
+  const callback = `/auth/callback?state=${[...f.pending.keys()][0]}&code=fake-code`;
+  assert.equal((await f.request(callback, undefined, { ...navigation, cookie: h.cookie.split('; ')[0] })).status, 401);
+  assert.equal(f.calls.exchange, 0);
+  const res = await f.request(callback, undefined, { ...navigation, cookie: h.cookie });
+  assert.equal(res.headers.get('location'), '/?login=success'); assert.equal(f.calls.exchange, 1);
+});
+test('OWNER_TOKEN：重啟後以同一個 token 建立的 app 接受舊 cookie；換 token 後舊 cookie 失效；取消配對清除 cookie', async t => {
+  const first = await fixture(t, { ownerToken: OWNER });
+  const owner = setCookie(await first.request('/api/pair', { token: OWNER })).split(';')[0];
+  const restarted = await fixture(t, { ownerToken: OWNER });
+  const session = setCookie(await restarted.request('/', undefined, { cookie: owner })).split(';')[0];
+  const h = { cookie: `${session}; ${owner}` };
+  const status = await (await restarted.request('/api/status', undefined, h)).json();
+  assert.equal(status.pairing, undefined); assert.equal((await restarted.request(`/api/journal?day=${day}`, undefined, h)).status, 200);
+  const rotated = await fixture(t, { ownerToken: 'C'.repeat(43) });
+  assert.equal((await (await rotated.request('/api/status', undefined, { cookie: setCookie(await rotated.request('/', undefined, { cookie: owner })).split(';')[0] + '; ' + owner })).json()).pairing, true);
+  const unpair = await restarted.request('/api/unpair', {}, { ...h, 'X-CSRF-Token': status.csrf });
+  assert.equal(unpair.status, 200); assert.match(setCookie(unpair), /^owner_token=;.*Expires=Thu, 01 Jan 1970/);
+  assert.equal((await restarted.request('/api/status', undefined, h)).status, 401); // 這個 session 也一併刪除
+});
+test('OWNER_TOKEN 關閉（預設）：本機不需配對，/api/pair 404，狀態不帶 pairing', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.request('/api/pair', { token: OWNER })).status, 404);
+  const status = await (await f.request('/api/status')).json();
+  assert.equal(status.pairing, undefined); assert.equal(status.ownerToken, false);
+  assert.equal((await f.request(`/api/journal?day=${day}`)).status, 200);
+});
+test('owner.token：第一次產生 43 字元 base64url（0600），之後沿用；格式不對時停止、不覆寫', t => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'owner-token-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const token = loadOwnerToken(dir);
+  assert.match(token, /^[A-Za-z0-9_-]{43}$/); assert.equal(loadOwnerToken(dir), token);
+  if (process.platform !== 'win32') assert.equal(statSync(path.join(dir, 'owner.token')).mode & 0o777, 0o600);
+  writeFileSync(path.join(dir, 'owner.token'), 'short');
+  assert.throws(() => loadOwnerToken(dir), /owner\.token 格式不正確/);
+  assert.equal(readFileSync(path.join(dir, 'owner.token'), 'utf8'), 'short');
 });

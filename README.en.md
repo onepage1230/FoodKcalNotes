@@ -121,10 +121,14 @@ The service listens only on 127.0.0.1. To use it from your own phone, [Tailscale
    set "OWNER_LOGIN=<你的 Tailscale 登入帳號>"
    rem 選填：Tailscale 不在預設位置時
    rem set "TAILSCALE=C:\Program Files\Tailscale\tailscale.exe"
+   rem 選填：擁有者配對（見下方「擁有者配對」）
+   rem set "OWNER_TOKEN=1"
    ```
 
-   `REMOTE_ORIGINS` is the URL you open on your phone; `OWNER_LOGIN` is your Tailscale login (`<你的 Tailscale 登入帳號>`), so your phone and computer use the same journal. (The `rem` comment means: optional, if Tailscale is not in its default location.)
+   `REMOTE_ORIGINS` is the URL you open on your phone; `OWNER_LOGIN` is your Tailscale login (`<你的 Tailscale 登入帳號>`), so your phone and computer use the same journal. (The `rem` comments mean: optional, if Tailscale is not in its default location; and optional, owner pairing, see below.)
 4. Open the ts.net URL on your phone and choose "Add to Home Screen" in the browser.
+
+**Owner pairing (`OWNER_TOKEN=1`)**: when enabled, only browsers paired with the pairing code count as the owner; other local programs and forged Tailscale headers cannot reach the main journal. The pairing code is a random value generated on first start and stored as `owner.token` in the data folder; the startup output prints it together with pairing URLs (`http://127.0.0.1:3000/?pair=…` and `https://…/?pair=…` for each `REMOTE_ORIGINS`). Each browser shows a pairing screen the first time: open a pairing URL, or paste the code. Your computer and phone each pair once (cookies are per URL); an iOS "Add to Home Screen" app may not share Safari's cookies, so paste the code again inside the app. Settings can unpair the current device; deleting `owner.token` and restarting issues a new code and every device must pair again. Off by default with Windows `start.bat`, on by default in Docker.
 
 ChatGPT sign-in and AI service settings can only be changed on the computer; on your phone you can log, view, and edit meals.
 
@@ -140,11 +144,15 @@ To keep the service always on without a laptop, run it with Docker on a NAS or L
    sudo mkdir -p /volume1/docker/foodkcal/journal
    sudo chown 1000:1000 /volume1/docker/foodkcal/journal && sudo chmod 700 /volume1/docker/foodkcal/journal
    sudo docker-compose up -d --build
-   sudo docker-compose logs --tail 20      # success once the startup banner appears
+   sudo docker-compose logs --tail 20      # success once the startup banner appears, followed by the pairing code and URLs
    ```
 
 2. Install Tailscale on the host and run `sudo tailscale serve --https=8443 --bg 3000`; open the `REMOTE_ORIGINS` URL on your phone (same as "Using from your phone" above).
-3. Update: `git pull && sudo docker-compose up -d --build`.
+3. Pair (Docker defaults to `OWNER_TOKEN=1`, see "Owner pairing" above):
+   - **Phone**: open the `https://…ts.net…/?pair=…` URL printed by `sudo docker-compose logs foodkcal`, or open the ts.net URL and paste the code on the pairing screen. If the home-screen app shows the pairing screen again, paste the code inside the app.
+   - **Computer** (through the SSH tunnel, see below): open `http://127.0.0.1:3000/?pair=…`, or paste the code on the pairing screen.
+   - The code can also be read with `sudo cat <DATA_DIR>/owner.token`. NAS administrators who can read Docker logs (`docker logs`) or the data folder can see it.
+4. Update: `git pull && sudo docker-compose up -d --build`. The pairing code stays the same, so paired devices do not need to pair again. After updating from an older version without pairing, each device shows the pairing screen once; pair as in step 3. To turn pairing off, set `OWNER_TOKEN=0` in `.env` (an empty value still means on).
 
 Notes:
 
@@ -155,7 +163,7 @@ Notes:
   - Synology defaults to `AllowTcpForwarding no`. Append `Match User <account>` and `AllowTcpForwarding yes` at the **end** of `/etc/ssh/sshd_config`, check with `sudo sshd -t`, then `sudo synosystemctl restart sshd`. Back it up first; DSM updates or changing SSH settings in the UI may overwrite it.
   - After restarting sshd, **existing SSH sessions keep the old setting**: reconnect. If a stale `ssh` still holds local port 3000, the new forward fails (check with `lsof -nP -iTCP:3000 -sTCP:LISTEN`).
   - If a proxy tool such as Surge interferes with 127.0.0.1, compare against `curl --noproxy '*'` to tell whether the proxy is intercepting.
-- Backup: `meals.sqlite` (with `-wal`, `-shm`) and the plaintext `credentials.json` in `DATA_DIR`; choose a backup destination you trust.
+- Backup: `meals.sqlite` (with `-wal`, `-shm`), the plaintext `credentials.json` and `owner.token` (pairing code) in `DATA_DIR`; choose a backup destination you trust. Skipping `owner.token` is fine: a restore generates a new code and devices simply pair again.
 
 ## Data & food library
 
@@ -185,10 +193,11 @@ Notes:
 ~/.my-chatgpt-local/            （Windows：%USERPROFILE%\.my-chatgpt-local；可用 MEAL_JOURNAL_DATA_DIR 改位置）
   credentials.json              ChatGPT 登入憑證、Claude API key
   master.key                    加密主金鑰（僅 Windows，DPAPI 保護）
+  owner.token                   擁有者配對碼（只在 OWNER_TOKEN=1 時產生）
   meals.sqlite                  日誌：餐點、照片、設定、背景工作、本機食物庫
 ```
 
-On Windows the folder is `%USERPROFILE%\.my-chatgpt-local`, and it can be relocated with `MEAL_JOURNAL_DATA_DIR`. `credentials.json` holds the ChatGPT sign-in credentials and Claude API key; `master.key` is the encryption master key (Windows only, DPAPI-protected); `meals.sqlite` is the journal: meals, photos, settings, background jobs, and the local food library.
+On Windows the folder is `%USERPROFILE%\.my-chatgpt-local`, and it can be relocated with `MEAL_JOURNAL_DATA_DIR`. `credentials.json` holds the ChatGPT sign-in credentials and Claude API key; `master.key` is the encryption master key (Windows only, DPAPI-protected); `owner.token` is the owner pairing code (created only with `OWNER_TOKEN=1`); `meals.sqlite` is the journal: meals, photos, settings, background jobs, and the local food library.
 
 - 設定 → 匯出日誌與食物備份 (Settings → Export journal and food backup) downloads a JSON file (credentials not included). For a full backup, stop the service and copy the `.sqlite` file (along with `-wal` and `-shm`).
 - If credentials can't be decrypted on Windows after switching computers or user accounts: delete `credentials.json` and `master.key`, then sign in / set the API key again. The journal is unaffected.
@@ -198,15 +207,17 @@ On Windows the folder is `%USERPROFILE%\.my-chatgpt-local`, and it can be reloca
 - Photos and descriptions are sent to **OpenAI or Anthropic** for recognition, depending on the services you configure; web search uses only the food name and description. All other data stays on your computer.
 - Credentials are kept only on the backend, never in the browser; they are encrypted on Windows and stored as 0600 plain text on macOS/Linux. All writes require an HttpOnly session and a CSRF token.
 - Requests forwarded through Tailscale (carrying `Tailscale-User-Login` or `X-Forwarded-*` headers) are always treated as remote; a forged `Host: 127.0.0.1` will not make them count as local.
-- Local connections need no login: other programs or other OS users on the same computer can also reach `127.0.0.1:3000` with your full permissions.
+- By default local connections need no login: other programs or other OS users on the same computer can also reach `127.0.0.1:3000` with your full permissions. With `OWNER_TOKEN=1`, only a browser holding the paired HttpOnly cookie is the owner (on by default in Docker).
 - `start.local.bat`, the database, and credentials are never committed to git.
 
 ## Security assumptions
 
-- The server binds only to `127.0.0.1` and treats any request to `127.0.0.1` without proxy headers as the owner with full rights (admin view of all journals, AI provider settings, ChatGPT login). Any process on the same host is therefore trusted as the owner, including, on a NAS with `network_mode: host`, other host-network containers/packages and other system accounts. Only run it on a host where you trust everything running locally.
+- The server binds only to `127.0.0.1`. **With `OWNER_TOKEN` off** (the Windows `start.bat` default), any request to `127.0.0.1` without proxy headers is the owner with full rights (admin view of all journals, AI provider settings, ChatGPT login); any process on the same host is trusted as the owner, including, on a NAS with `network_mode: host`, other host-network containers/packages and other system accounts. In such environments turn on `OWNER_TOKEN=1` (the Docker default).
+- **With `OWNER_TOKEN=1`**, a valid pairing cookie (`owner_token`) is the only proof of being the owner: both local requests and requests whose `Tailscale-User-Login` equals `OWNER_LOGIN` must carry it, and it is checked on every request. Local processes and forged `Host`/`Tailscale-User-Login` headers get no main journal, export, admin view, AI provider settings or ChatGPT login. Failed pairing attempts are limited to 5 per minute (shared by the whole process; while over the limit even the correct code is refused).
+- Even with `OWNER_TOKEN` on, a local process can still forge `Host` and `Tailscale-User-Login` to **impersonate any friend** (read/write that friend's journal, use AI under their quota); the friend usage, session and photo limits only bind people connecting through Tailscale. Anyone who can read the data folder (`owner.token`) or the Docker logs can obtain the pairing code and act as the owner; protect access to the data folder, backups, NAS snapshots and Docker logs.
+- Cookies are scoped by host name, not port: other web services on the same ts.net host name, or on other `127.0.0.1` ports in the owner's browser, receive `owner_token` when the owner visits them. Do not run other untrusted web services on the same host name.
 - Remote identity relies entirely on Tailscale serve setting `Tailscale-User-Login` and stripping client-supplied copies. Do not enable Tailscale Funnel on this port, do not put another reverse proxy in front, and do not bind 0.0.0.0.
-- A local process can also send a forged `Host` and `Tailscale-User-Login` directly, impersonating the owner or any friend. The friend usage, session and photo limits only bind people connecting through Tailscale, not local processes.
-- On macOS/Linux `credentials.json` is plain text (0600); protect backups and NAS snapshots of the data directory.
+- On macOS/Linux `credentials.json` and `owner.token` are plain text (0600); protect backups and NAS snapshots of the data directory.
 
 ## Development
 

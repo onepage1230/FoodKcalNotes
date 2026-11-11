@@ -19,7 +19,7 @@ npm run fill-nutrients -- data/tfda-common.json [--dry-run]   # 用內附資料�
 docker-compose up -d --build               # 見 README「Docker／群暉 NAS 部署」
 ```
 
-環境變數：`PORT`、`MEAL_JOURNAL_DATA_DIR`（預設 `~/.my-chatgpt-local`）、`REMOTE_ORIGINS` + `OWNER_LOGIN`（兩者必須同時設定）、`CHATGPT_SHARED`、`FRIENDS_CACHE`、`FRIENDS_DAILY_LIMIT`（見 `server/README.md`）、`TZ`。
+環境變數：`PORT`、`MEAL_JOURNAL_DATA_DIR`（預設 `~/.my-chatgpt-local`）、`REMOTE_ORIGINS` + `OWNER_LOGIN`（兩者必須同時設定）、`OWNER_TOKEN`、`CHATGPT_SHARED`、`FRIENDS_CACHE`、`FRIENDS_DAILY_LIMIT`（見 `server/README.md`）、`TZ`。
 
 ## 架構
 
@@ -32,12 +32,13 @@ docker-compose up -d --build               # 見 README「Docker／群暉 NAS �
 - `server/repeat-candidates.js`：候選餐點歸納的純函式（不碰資料庫與時鐘）；`food-routes.js` 的 `GET /api/repeat-candidates` 與 `POST /api/meals/:id/repeat` 使用它。
 - `server/journal.js`：`node:sqlite` 資料層（餐點、照片、設定、jobs、食物庫）。`EXCLUSIVE` 互斥詞規則與 `conflicts()` 擋下炸≠蒸、無糖≠含糖等，模型無法推翻。
 - `server/claude.js`：Claude API 的 `infer` 實作，與 ChatGPT（Responses API + SSE，`sse.js`）對外介面一致，所以分析流程不知道是哪個服務在處理。
-- `server/storage.js`：`credentials.json`。Windows 用 DPAPI 保護的 AES-256-GCM，其他平台明文 0600，並會對資料夾 `chmod 0700`（資料夾擁有者不對時啟動即失敗）。
+- `server/storage.js`：`credentials.json` 與 `owner.token`（`loadOwnerToken`）。Windows 用 DPAPI 保護的 AES-256-GCM，其他平台明文 0600，並會對資料夾 `chmod 0700`（資料夾擁有者不對時啟動即失敗）。
 
 ### 身分與日誌
 
 - 經 Tailscale serve 的請求（帶 `Tailscale-User-Login` 或 `X-Forwarded-*`）一律視為遠端，即使 `Host` 是 127.0.0.1。安全模型依賴這點，**不要**加入其他反向代理或改綁 0.0.0.0。
-- 安全前提（本機要求即擁有者、Funnel／其他反向代理的禁忌、憑證明文）寫在 README「安全前提」。
+- 安全前提（`OWNER_TOKEN` 關閉時本機要求即擁有者、Funnel／其他反向代理的禁忌、憑證明文）寫在 README「安全前提」。
+- `OWNER_TOKEN=1`（Docker 預設；`createApp` 的 `ownerToken` 預設 null，測試與 `start.bat` 不受影響）：本機與 `OWNER_LOGIN` 都必須帶與資料夾 `owner.token` 相符的 `owner_token` cookie（每次要求比對，不記在 session）才是擁有者；否則為未配對（session 身分 `'Unpaired'`、`req.journal = null`），只能開首頁、靜態檔、精簡 `/api/status` 與 `POST /api/pair`。朋友不需要 token。配對成功會刪掉未配對的 session，由用戶端（`client/Pairing.jsx`）重新載入首頁取得擁有者 session。
 - 本機與 `OWNER_LOGIN` 共用主日誌 `meals.sqlite`；其他登入身分各自一本 `friends/meals-<sha256前16碼>.sqlite`，食物庫共用主日誌。
 - ChatGPT 登入、切換、登出、`/api/providers`、管理員檢視都只限本機，因為 OAuth 回程網址固定是 `http://127.0.0.1:<PORT>`。
 - 朋友（非擁有者身分）的 AI 要求有並行（2）與每日（`FRIENDS_DAILY_LIMIT`）上限，在 `food-routes.js` 的 `claim`；擁有者不受限。朋友日誌最多保留 100 張照片（`journal.js` 的 `photoLimit`／`trimPhotos`，依存入順序清掉最早的照片、餐點保留，並用 incremental auto_vacuum 回收空間）。

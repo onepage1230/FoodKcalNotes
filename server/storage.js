@@ -78,3 +78,18 @@ export function createStore(directory = path.join(os.homedir(), '.my-chatgpt-loc
   save();
   return { data, save };
 }
+
+// 擁有者 token（OWNER_TOKEN=1）：32 bytes 隨機值（base64url），存在資料夾的 owner.token（0600）；不存在才產生。
+// 檔案格式不對時停止啟動、不覆寫，避免默默換掉所有裝置的配對。刪除檔案後重啟即換新 token，所有裝置要重新配對。
+export function loadOwnerToken(directory) {
+  const filename = path.join(directory, 'owner.token');
+  let token;
+  try { token = fs.readFileSync(filename, 'utf8').trim(); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw new Error('owner.token 無法讀取；請檢查檔案權限，或刪除後重啟以產生新的配對碼。');
+    token = randomBytes(32).toString('base64url');
+    writeAtomic(filename, token + '\n');
+  }
+  if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('owner.token 格式不正確；請刪除後重啟以產生新的配對碼（所有裝置需重新配對）。');
+  return token;
+}

@@ -1,5 +1,5 @@
 import express from 'express';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { createOAuth, createTransaction, random, RESOURCE, ISSUER } from './oauth.js';
 import { attachFoodRoutes, fallbackWorthy } from './food-routes.js';
 import { collectResponse } from './food-analysis.js';
@@ -21,8 +21,16 @@ export function contentSecurityPolicy(html) {
 }
 
 export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', journalFor = null, listJournals = null,
-  oauth = createOAuth(), fetcher = fetch, journal = null, anthropicFactory = createClaudeClient, chatgptShared = false, friendsCache = false, friendsDailyLimit = 30, devMode = false, now = () => new Date() }) {
+  oauth = createOAuth(), fetcher = fetch, journal = null, anthropicFactory = createClaudeClient, chatgptShared = false, friendsCache = false, friendsDailyLimit = 30, devMode = false, now = () => new Date(),
+  ownerToken = null }) {
   const app = express();
+  // 擁有者 token（OWNER_TOKEN=1）：本機與 OWNER_LOGIN 的要求都必須帶有效的 owner_token cookie 才算擁有者。
+  // 每次要求都重新比對（不記在 session），記憶體只保留 SHA-256，以 timingSafeEqual 比較。
+  const sha256 = value => createHash('sha256').update(value).digest();
+  const ownerHash = ownerToken ? sha256(ownerToken) : null;
+  const ownerMatch = value => typeof value === 'string' && value.length > 0 && value.length <= 200 && timingSafeEqual(sha256(value), ownerHash);
+  const pairFailures = []; // 配對失敗時間（毫秒），全程序共用：本機程式能偽造任何標頭，無法依來源分開計算
+  const PAIR_LIMIT = 5, PAIR_WINDOW = 60_000;
   // 遠端網址（例如 Tailscale serve 的 https://xxx.ts.net）只能使用日誌，不能管理 ChatGPT 登入。
   const origins = [origin, ...remoteOrigins];
   const remoteHosts = new Set(remoteOrigins.map(o => new URL(o).host));
@@ -73,24 +81,37 @@ export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', 
       ['cross-site', 'same-site'].includes(req.headers['sec-fetch-site']))) return res.status(403).json({
         error: '拒絕跨來源要求。', version: '2.0.0', path: req.path, method: req.method,
       });
-    const cookie = req.headers.cookie?.split('; ').find(x => x.startsWith('local_session='))?.slice(14);
-    // session 依身分記帳：本機與擁有者共用 'owner'，朋友各用小寫登入名稱，朋友無法擠掉擁有者的 session。
-    const identity = req.friend ? req.user.toLowerCase() : 'owner';
+    const cookies = req.headers.cookie?.split(/;\s*/) || [];
+    const cookieValue = name => cookies.find(x => x.startsWith(name + '='))?.slice(name.length + 1);
+    const cookie = cookieValue('local_session');
+    // 未配對：啟用 OWNER_TOKEN 時，本機或 OWNER_LOGIN 的要求沒有有效 owner_token cookie。不給主日誌，只能開首頁與配對。
+    // 朋友不需要 token，帶了也仍是朋友（身分由 Tailscale 決定）。
+    req.unpaired = !!ownerHash && !req.friend && !ownerMatch(cookieValue('owner_token'));
+    if (req.unpaired) req.journal = null;
+    // session 依身分記帳：本機與擁有者共用 'owner'，朋友各用小寫登入名稱，未配對另用 'Unpaired'（含大寫，不會等於小寫的登入名稱）；
+    // 不同身分互相擠不掉 session，配對前後也不能沿用同一個 session。
+    const identity = req.friend ? req.user.toLowerCase() : req.unpaired ? 'Unpaired' : 'owner';
     let session = sessions.get(cookie);
     if (session && session.expiresAt < Date.now()) { sessions.delete(cookie); session = null; }
     if (session && session.identity !== identity) session = null; // 不同身分的 session 一律視為不存在
     if (!session && req.method === 'GET' && req.path === '/') {
       const id = random();
       session = { id, csrf: random(), identity, expiresAt: Date.now() + 24 * 3600_000 };
-      // 每個身分各有上限（擁有者 1000、朋友 20），超過就只淘汰該身分最舊的；朋友之間另有全域上限 1000，不會動到擁有者的 session。
+      // 每個身分各有上限（擁有者 1000、朋友與未配對各 20），超過就只淘汰該身分最舊的；朋友之間另有全域上限 1000，不會動到擁有者與未配對的 session。
       const evictOldest = match => { for (const [k, s] of sessions) if (match(s)) return sessions.delete(k); };
-      let own = 0, friends = 0; for (const s of sessions.values()) { if (s.identity === identity) own++; if (s.identity !== 'owner') friends++; }
-      if (own >= (req.friend ? 20 : 1000)) evictOldest(s => s.identity === identity);
-      else if (req.friend && friends >= 1000) evictOldest(s => s.identity !== 'owner');
+      const isFriend = s => s.identity !== 'owner' && s.identity !== 'Unpaired';
+      let own = 0, friends = 0; for (const s of sessions.values()) { if (s.identity === identity) own++; if (isFriend(s)) friends++; }
+      if (own >= (identity === 'owner' ? 1000 : 20)) evictOldest(s => s.identity === identity);
+      else if (req.friend && friends >= 1000) evictOldest(isFriend);
       sessions.set(id, session);
       res.cookie('local_session', id, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 24 * 3600_000, secure: remote });
     }
     req.localSession = session;
+    // 未配對只能開首頁、靜態檔、精簡的 /api/status 與 POST /api/pair；其他 /api、/auth（含 OAuth 回程）一律 401。
+    // 用正規化後的 path 比對，/API/Journal/ 這類寫法也擋得住。
+    if (req.unpaired && (path === '/api' || path.startsWith('/api/') || path === '/auth' || path.startsWith('/auth/')) &&
+      !(req.method === 'GET' && path === '/api/status') && !(req.method === 'POST' && path === '/api/pair'))
+      return res.status(401).json({ error: '這個裝置尚未配對，請重新開啟首頁並輸入配對碼。', pairing: true });
     next();
   });
   app.use(express.json({ limit: '8mb' }));
@@ -230,7 +251,30 @@ export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', 
       res.status(meal ? 200 : 404).json(meal || { error: '找不到餐點。' });
     });
   }
-  app.get('/api/status', (req, res) => res.json({ csrf: req.localSession.csrf, loginError: req.localSession.loginError || '', remote: req.remote, user: req.user || '', admin: !req.remote && !!listJournals,
+  // 配對：POST /api/pair { token }（需 session 與 CSRF）。成功就設 owner_token cookie，並刪掉這個未配對的 session，
+  // 由用戶端重新載入首頁取得新的擁有者 session（權限改變後換 session）。失敗每分鐘最多 5 次，超過連正確的也先拒絕。
+  app.post('/api/pair', (req, res) => {
+    if (!ownerHash) return res.status(404).json({ error: '這台伺服器沒有開啟擁有者配對（OWNER_TOKEN）。' });
+    if (req.friend) return res.status(403).json({ error: '只有擁有者的裝置需要配對。' });
+    const at = now().getTime();
+    while (pairFailures.length && pairFailures[0] <= at - PAIR_WINDOW) pairFailures.shift();
+    if (pairFailures.length >= PAIR_LIMIT) return res.status(429).json({ error: '配對失敗次數太多，請一分鐘後再試。' });
+    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+    if (!ownerMatch(token)) { pairFailures.push(at); return res.status(403).json({ error: '配對碼不正確。' }); }
+    if (req.unpaired) sessions.delete(req.localSession.id);
+    // SameSite=Lax（不是 Strict）：OAuth 回程是從 auth.openai.com 跨站導回的 GET，仍要帶上這個 cookie 才認得是擁有者。
+    res.cookie('owner_token', token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 400 * 24 * 3600_000, secure: req.remote });
+    res.json({ ok: true });
+  });
+  // 取消配對：清除這個瀏覽器的 owner_token cookie（不影響其他裝置；要讓所有裝置失效請刪除 owner.token 後重啟）。
+  app.post('/api/unpair', (req, res) => {
+    if (!ownerHash || req.friend) return res.status(404).json({ error: '這個裝置沒有配對。' });
+    sessions.delete(req.localSession.id);
+    res.clearCookie('owner_token', { httpOnly: true, sameSite: 'lax', path: '/', secure: req.remote });
+    res.json({ ok: true });
+  });
+  // 未配對時只回傳配對需要的欄位：不含帳號、登入身分與登入錯誤。
+  app.get('/api/status', (req, res) => req.unpaired ? res.json({ csrf: req.localSession.csrf, pairing: true, remote: req.remote }) : res.json({ csrf: req.localSession.csrf, ownerToken: !!ownerHash && !req.friend, loginError: req.localSession.loginError || '', remote: req.remote, user: req.user || '', admin: !req.remote && !!listJournals,
     providersReady: providersReady(req), ...(!providersReady(req) && { providersError: providersError(req) }),
     // 遠端不回傳 client ID：只給使用中的帳號（以 'active' 代稱）；ChatGPT 不開放給朋友時不給帳號。
     ...(req.remote ? { activeId: 'active', accounts: chatgptFor(req) ? accountsView(true).filter(a => a.client_id === store.data.activeId).map(a => ({ ...a, client_id: 'active' })) : [] }

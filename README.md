@@ -117,10 +117,14 @@ ChatGPT 登入憑證與 Claude API key 只保存在電腦上的 `credentials.jso
    set "OWNER_LOGIN=<你的 Tailscale 登入帳號>"
    rem 選填：Tailscale 不在預設位置時
    rem set "TAILSCALE=C:\Program Files\Tailscale\tailscale.exe"
+   rem 選填：擁有者配對（見下方「擁有者配對」）
+   rem set "OWNER_TOKEN=1"
    ```
 
    `REMOTE_ORIGINS` 是手機開啟的網址；`OWNER_LOGIN` 是你的 Tailscale 登入帳號，讓手機與電腦使用同一本日誌。
 4. 手機開啟 ts.net 網址，瀏覽器選「加入主畫面」。
+
+**擁有者配對（`OWNER_TOKEN=1`）**：開啟後，只有用配對碼配對過的瀏覽器才算擁有者，本機其他程式或偽造的 Tailscale 標頭都拿不到主日誌。配對碼是啟動時產生、存在資料夾 `owner.token` 的隨機值，啟動訊息會印出配對碼與配對網址（`http://127.0.0.1:3000/?pair=…` 與每個 `REMOTE_ORIGINS` 的 `https://…/?pair=…`）。每個瀏覽器第一次開啟時會出現配對畫面：直接開配對網址，或貼上配對碼即可。電腦與手機要各配對一次（cookie 依網址分開）；iOS「加入主畫面」的 App 可能不和 Safari 共用 cookie，要在 App 裡再貼一次配對碼。設定頁可取消這個裝置的配對；刪除 `owner.token` 後重啟會換新配對碼，所有裝置都要重新配對。Windows 的 `start.bat` 預設不開啟，Docker 版預設開啟。
 
 ChatGPT 登入與 AI 服務設定只能在電腦上操作；手機可以記錄、查看與修改餐點。
 
@@ -136,11 +140,15 @@ ChatGPT 登入與 AI 服務設定只能在電腦上操作；手機可以記錄�
    sudo mkdir -p /volume1/docker/foodkcal/journal
    sudo chown 1000:1000 /volume1/docker/foodkcal/journal && sudo chmod 700 /volume1/docker/foodkcal/journal
    sudo docker-compose up -d --build
-   sudo docker-compose logs --tail 20      # 看到「飲食日誌 … 已啟動」即成功
+   sudo docker-compose logs --tail 20      # 看到「飲食日誌 … 已啟動」即成功，下方附配對碼與配對網址
    ```
 
 2. 在主機上安裝 Tailscale，執行 `sudo tailscale serve --https=8443 --bg 3000`，手機開 `REMOTE_ORIGINS` 的網址（同上方「從手機使用」）。
-3. 更新：`git pull && sudo docker-compose up -d --build`。
+3. 配對（Docker 版預設 `OWNER_TOKEN=1`，見上方「擁有者配對」）：
+   - **手機**：開 `sudo docker-compose logs foodkcal` 印出的 `https://…ts.net…/?pair=…` 網址；或開 ts.net 網址後，在配對畫面貼上配對碼。加入主畫面的 App 若又出現配對畫面，在 App 裡再貼一次。
+   - **電腦**（經 SSH 隧道，見下方）：開 `http://127.0.0.1:3000/?pair=…`，或在配對畫面貼上配對碼。
+   - 配對碼也可以用 `sudo cat <DATA_DIR>/owner.token` 讀取。能讀 Docker 紀錄（`docker logs`）或資料夾的 NAS 管理員都看得到配對碼。
+4. 更新：`git pull && sudo docker-compose up -d --build`。配對碼不變，已配對的裝置不用重新配對。從沒有配對功能的舊版更新後，每個裝置第一次開啟會出現配對畫面，照第 3 步配對即可。要關閉配對，在 `.env` 設 `OWNER_TOKEN=0`（留空仍是開啟）。
 
 注意事項：
 
@@ -151,7 +159,7 @@ ChatGPT 登入與 AI 服務設定只能在電腦上操作；手機可以記錄�
   - Synology 預設 `AllowTcpForwarding no`，需在 `/etc/ssh/sshd_config` **檔尾**加 `Match User <帳號>` 與 `AllowTcpForwarding yes`，先用 `sudo sshd -t` 檢查，再 `sudo synosystemctl restart sshd`。修改前先備份；DSM 更新或在介面改 SSH 設定時可能被覆寫。
   - sshd 重啟後，**既有的 SSH 連線仍沿用舊設定**，要關掉重連；本機 3000 若還被舊的 `ssh` 佔用，新的轉發會失敗（`lsof -nP -iTCP:3000 -sTCP:LISTEN` 檢查）。
   - 若 Mac 上有 Surge 等代理工具，連 127.0.0.1 出現怪狀時，用 `curl --noproxy '*'` 對照可以分辨是否被代理攔截。
-- 備份：`DATA_DIR` 內的 `meals.sqlite`（含 `-wal`、`-shm`）與明文的 `credentials.json`，備份目的地請選你信任的地方。
+- 備份：`DATA_DIR` 內的 `meals.sqlite`（含 `-wal`、`-shm`）、明文的 `credentials.json` 與 `owner.token`（配對碼），備份目的地請選你信任的地方。不備份 `owner.token` 也可以，還原後會產生新的配對碼，裝置重新配對即可。
 
 ## 資料與食物庫
 
@@ -181,6 +189,7 @@ ChatGPT 登入與 AI 服務設定只能在電腦上操作；手機可以記錄�
 ~/.my-chatgpt-local/            （Windows：%USERPROFILE%\.my-chatgpt-local；可用 MEAL_JOURNAL_DATA_DIR 改位置）
   credentials.json              ChatGPT 登入憑證、Claude API key
   master.key                    加密主金鑰（僅 Windows，DPAPI 保護）
+  owner.token                   擁有者配對碼（只在 OWNER_TOKEN=1 時產生）
   meals.sqlite                  日誌：餐點、照片、設定、背景工作、本機食物庫
 ```
 
@@ -192,15 +201,17 @@ ChatGPT 登入與 AI 服務設定只能在電腦上操作；手機可以記錄�
 - 照片與描述會依你設定的服務送到 **OpenAI 或 Anthropic** 做辨識；網路搜尋只使用食物名稱與描述。其餘資料都留在你的電腦上。
 - 憑證只存在後端，不放在瀏覽器；Windows 上加密保存，macOS／Linux 為 0600 明文。所有寫入都需要 HttpOnly session 與 CSRF token。
 - 經 Tailscale 轉送的要求（帶 `Tailscale-User-Login` 或 `X-Forwarded-*` 標頭）一律視為遠端，偽造 `Host: 127.0.0.1` 也不會被當成本機。
-- 本機連線不需登入：同一台電腦上的其他程式或其他作業系統使用者，也能以你的完整權限連到 `127.0.0.1:3000`。
+- 預設本機連線不需登入：同一台電腦上的其他程式或其他作業系統使用者，也能以你的完整權限連到 `127.0.0.1:3000`。設 `OWNER_TOKEN=1` 後，要有配對過的 HttpOnly cookie 才是擁有者（Docker 版預設開啟）。
 - `start.local.bat`、資料庫與憑證都不進 git。
 
 ## 安全前提
 
-- 服務只綁 `127.0.0.1`，並把任何不帶代理標頭、連到 `127.0.0.1` 的要求視為擁有者，擁有完整權限（檢視所有日誌、AI 服務設定、ChatGPT 登入）。因此同一台主機上的任何程式都被信任為擁有者；在群暉 NAS 使用 `network_mode: host` 時，包含其他 host 網路的容器／套件與其他系統帳號。只在你信任主機上所有本機程式的環境執行。
+- 服務只綁 `127.0.0.1`。**`OWNER_TOKEN` 關閉時**（Windows `start.bat` 的預設），任何不帶代理標頭、連到 `127.0.0.1` 的要求都視為擁有者，擁有完整權限（檢視所有日誌、AI 服務設定、ChatGPT 登入）；同一台主機上的任何程式都被信任為擁有者，在群暉 NAS 使用 `network_mode: host` 時，包含其他 host 網路的容器／套件與其他系統帳號。這種環境請開啟 `OWNER_TOKEN=1`（Docker 版預設開啟）。
+- **`OWNER_TOKEN=1` 時**，有效的配對 cookie（`owner_token`）是證明擁有者的唯一方式：本機要求與 `Tailscale-User-Login` 等於 `OWNER_LOGIN` 的要求都要帶它，每次要求都重新比對。本機程式或偽造的 `Host`／`Tailscale-User-Login` 拿不到主日誌、匯出、管理員檢視、AI 服務設定與 ChatGPT 登入。配對失敗每分鐘最多 5 次（全程序共用，超過時連正確的配對碼也暫時拒絕）。
+- 即使開啟 `OWNER_TOKEN`，本機程式仍能偽造 `Host` 與 `Tailscale-User-Login` **冒充任何朋友**（讀寫朋友日誌、用朋友的額度呼叫 AI）；朋友的用量、session 與照片上限只擋得住經 Tailscale 連入的人。能讀資料資料夾（`owner.token`）或 Docker 紀錄的人也能取得配對碼，等同擁有者，請保護資料資料夾、備份、NAS 快照與 Docker 紀錄的存取權。
+- Cookie 只依主機名稱區分、不分連接埠：同一個 ts.net 主機名稱上的其他網頁服務，或擁有者瀏覽器裡 `127.0.0.1` 其他連接埠的服務，在擁有者造訪時都會收到 `owner_token`。不要在同一個主機名稱上開其他不信任的網頁服務。
 - 遠端身分完全依賴 Tailscale serve 加上 `Tailscale-User-Login`，並移除用戶端自行送來的同名標頭。不要對這個埠啟用 Tailscale Funnel、不要在前面再放其他反向代理、不要綁定 0.0.0.0。
-- 本機程式也能直接送出偽造的 `Host` 與 `Tailscale-User-Login`，冒充擁有者或任何朋友。朋友的用量、session 與照片上限只擋得住經 Tailscale 連入的人，擋不住本機程式。
-- macOS／Linux 上 `credentials.json` 是 0600 明文；請保護資料資料夾的備份與 NAS 快照。
+- macOS／Linux 上 `credentials.json` 與 `owner.token` 是 0600 明文；請保護資料資料夾的備份與 NAS 快照。
 
 ## 開發
 

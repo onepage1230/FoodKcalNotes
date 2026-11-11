@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createApp, contentSecurityPolicy } from './app.js';
-import { createStore } from './storage.js';
+import { createStore, loadOwnerToken } from './storage.js';
 import { createJournal } from './journal.js';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
@@ -55,7 +55,11 @@ const friendsCache = process.env.FRIENDS_CACHE === '1';
 // FRIENDS_DAILY_LIMIT：每位朋友每天可用的 AI 分析次數（預設 30，0 不限），避免朋友無上限消耗擁有者的 API key 額度。
 const friendsDailyLimit = Number(process.env.FRIENDS_DAILY_LIMIT || 30);
 if (!Number.isInteger(friendsDailyLimit) || friendsDailyLimit < 0) throw new Error('FRIENDS_DAILY_LIMIT 必須是 0 以上的整數（0 表示不限）。');
-const { app, errors } = createApp({ store, origin, remoteOrigins, ownerLogin, journalFor, listJournals, journal, chatgptShared, friendsCache, friendsDailyLimit, devMode: process.argv.includes('--dev') });
+// OWNER_TOKEN=1：擁有者必須用配對碼配對過的瀏覽器（owner_token cookie）才算擁有者，本機程式與偽造標頭拿不到主日誌。
+// 配對碼存在資料夾的 owner.token；Docker 版預設開啟，Windows start.bat 預設關閉。
+if (!['', '0', '1'].includes(process.env.OWNER_TOKEN || '')) throw new Error('OWNER_TOKEN 只能是 1（開啟擁有者配對）或 0（關閉）。');
+const ownerToken = process.env.OWNER_TOKEN === '1' ? loadOwnerToken(dataDirectory) : null;
+const { app, errors } = createApp({ store, origin, remoteOrigins, ownerLogin, journalFor, listJournals, journal, chatgptShared, friendsCache, friendsDailyLimit, ownerToken, devMode: process.argv.includes('--dev') });
 let vite;
 if (process.argv.includes('--dev')) {
   const { createServer } = await import('vite');
@@ -70,7 +74,10 @@ if (process.argv.includes('--dev')) {
   app.get('/', (req, res) => res.sendFile(path.join(root, 'dist/index.html')));
 }
 app.use(errors);
-const server = app.listen(port, '127.0.0.1', () => console.log(`\n飲食日誌 v2.0.0 已啟動：${origin}${remoteOrigins.map(o => `\n遠端（Tailscale）：${o}`).join('')}\n按 Ctrl+C 結束。\n`));
+// 配對網址與配對碼印在啟動訊息（docker-compose logs 看得到；能讀 Docker 紀錄的 NAS 管理員也看得到）。
+const pairing = ownerToken ? `\n\n擁有者配對（OWNER_TOKEN=1）：在要使用的瀏覽器開啟以下網址完成配對，或在配對畫面貼上配對碼。` +
+  [origin, ...remoteOrigins].map(o => `\n  ${o}/?pair=${ownerToken}`).join('') + `\n配對碼：${ownerToken}\n（也存在 ${path.join(dataDirectory, 'owner.token')}；刪除後重啟會換新的，所有裝置需重新配對）` : '';
+const server = app.listen(port, '127.0.0.1', () => console.log(`\n飲食日誌 v2.0.0 已啟動：${origin}${remoteOrigins.map(o => `\n遠端（Tailscale）：${o}`).join('')}${pairing}\n按 Ctrl+C 結束。\n`));
 server.on('error', error => {
   console.error(error.code === 'EADDRINUSE' ? `連接埠 ${port} 已被使用，請改用 PORT 環境變數。` : `本機服務無法啟動（${error.code || error.message}）。`);
   process.exit(1);
