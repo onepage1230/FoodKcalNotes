@@ -15,5 +15,6 @@ services:
       MEAL_JOURNAL_DATA_DIR: /data
       REMOTE_ORIGINS: ${REMOTE_ORIGINS}
       OWNER_LOGIN: ${OWNER_LOGIN}
+      FRIENDS_DAILY_LIMIT: ${FRIENDS_DAILY_LIMIT:-30}   # 其他 Tailscale 身分每天的 AI 分析次數，0 不限
     volumes:
       - ${DATA_DIR:-./data-store}:/data

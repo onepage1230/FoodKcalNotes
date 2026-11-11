@@ -19,7 +19,7 @@ npm run fill-nutrients -- data/tfda-common.json [--dry-run]   # 用內附資料�
 docker-compose up -d --build               # 見 README「Docker／群暉 NAS 部署」
 ```
 
-環境變數：`PORT`、`MEAL_JOURNAL_DATA_DIR`（預設 `~/.my-chatgpt-local`）、`REMOTE_ORIGINS` + `OWNER_LOGIN`（兩者必須同時設定）、`CHATGPT_SHARED`、`FRIENDS_CACHE`（見 `server/README.md`）、`TZ`。
+環境變數：`PORT`、`MEAL_JOURNAL_DATA_DIR`（預設 `~/.my-chatgpt-local`）、`REMOTE_ORIGINS` + `OWNER_LOGIN`（兩者必須同時設定）、`CHATGPT_SHARED`、`FRIENDS_CACHE`、`FRIENDS_DAILY_LIMIT`（見 `server/README.md`）、`TZ`。
 
 ## 架構
 
@@ -39,6 +39,9 @@ docker-compose up -d --build               # 見 README「Docker／群暉 NAS �
 - 經 Tailscale serve 的請求（帶 `Tailscale-User-Login` 或 `X-Forwarded-*`）一律視為遠端，即使 `Host` 是 127.0.0.1。安全模型依賴這點，**不要**加入其他反向代理或改綁 0.0.0.0。
 - 本機與 `OWNER_LOGIN` 共用主日誌 `meals.sqlite`；其他登入身分各自一本 `friends/meals-<sha256前16碼>.sqlite`，食物庫共用主日誌。
 - ChatGPT 登入、切換、登出、`/api/providers`、管理員檢視都只限本機，因為 OAuth 回程網址固定是 `http://127.0.0.1:<PORT>`。
+- 朋友（非擁有者身分）的 AI 要求有並行（2）與每日（`FRIENDS_DAILY_LIMIT`）上限，在 `food-routes.js` 的 `claim`；擁有者不受限。
+- 登入失敗訊息存在 session，由 `/api/status` 的 `loginError` 取回，網址只帶 `?login_error=1`，前端不顯示網址裡的文字。
+- 正式模式（`npm start`）送出 CSP，inline 腳本的雜湊由 `dist/index.html` 算出（`app.js` 的 `contentSecurityPolicy`）；在 `index.html` 加 inline 腳本或樣式前先確認 CSP。開發模式不送 CSP。
 
 ### 不可違反的設計原則（見 `docs/decisions/` ADR）
 

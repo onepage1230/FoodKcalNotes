@@ -97,7 +97,7 @@ npm ci && npm run build && npm start
 
 在電腦上開「設定 → AI 服務」設定。可以只用其中一種，也可以兩種都啟用。
 
-ChatGPT 登入憑證與 Claude API key 只保存在電腦上的 `credentials.json`（Windows 上加密，見上方「憑證保護」），不會傳到瀏覽器或其他裝置；透過 Tailscale serve，你的多部裝置（手機、平板、其他電腦）都能連回這台電腦，使用同一份伺服器端憑證。ChatGPT 登入只限你自己的帳號使用，依 OpenAI 使用條款，請勿分享帳號或額度；Claude API 的用量計入該 API key 所屬的帳戶。
+ChatGPT 登入憑證與 Claude API key 只保存在電腦上的 `credentials.json`（Windows 上加密，見上方「憑證保護」），不會傳到瀏覽器或其他裝置；透過 Tailscale serve，你的多部裝置（手機、平板、其他電腦）都能連回這台電腦，使用同一份伺服器端憑證。ChatGPT 登入只限你自己的帳號使用，依 OpenAI 使用條款，請勿分享帳號或額度；Claude API 的用量計入該 API key 所屬的帳戶；其他 Tailscale 身分每天的 AI 分析次數有上限（`FRIENDS_DAILY_LIMIT`，見 [`server/README.md`](server/README.md)）。
 
 - **ChatGPT（選用）**：按 Continue with ChatGPT 登入並授權，再選辨識模型（照片需要支援影像輸入的模型）。使用你 ChatGPT 方案的額度，不需要 OpenAI API key。登入、切換、登出**只能在電腦上**的 `http://127.0.0.1:3000` 進行，因為授權回程網址固定在本機。
 - **Claude API**：到 [Claude Console](https://console.anthropic.com/) **在一個 Workspace（工作區）內**建立 API key，貼到設定中。保存前會先以免費的 Token Counting API（所選模型）驗證，無效就不保存；未綁定工作區的金鑰會被拒絕並提示原因；畫面只顯示末四碼。可選 Haiku 5.5（預設，最便宜）、Sonnet 5.5、Opus 5.5。
@@ -147,7 +147,7 @@ ChatGPT 登入與 AI 服務設定只能在電腦上操作；手機可以記錄�
 - **`network_mode: host` 是必要的**：伺服器只監聽 127.0.0.1，一般的連接埠對應連不到。
 - **時區**：餐點的日期、時間與用餐時段都用伺服器本地時間，容器預設是 UTC（台北會慢 8 小時）。`docker-compose.yml` 預設 `TZ=Asia/Taipei`，可在 `.env` 加 `TZ=...` 覆寫。
 - **`DATA_DIR` 要指到獨立資料夾**，不能是專案內的 `data/`（那是內附的營養資料）；資料夾需由 uid 1000 擁有，否則啟動時 `chmod` 會報 `EPERM`。
-- **ChatGPT 登入要在 `127.0.0.1:3000` 完成**。主機沒有瀏覽器時，在電腦上開 SSH 隧道：`ssh -L 3000:127.0.0.1:3000 使用者@主機 -p <port>`，再開 `http://127.0.0.1:3000`。登入完成即可關閉。若只用 Claude API key，可直接在手機的設定頁貼上，不需要隧道。
+- **ChatGPT 登入要在 `127.0.0.1:3000` 完成**。主機沒有瀏覽器時，在電腦上開 SSH 隧道：`ssh -L 3000:127.0.0.1:3000 使用者@主機 -p <port>`，再開 `http://127.0.0.1:3000`。登入完成即可關閉。Claude API key 同樣只能在 `127.0.0.1:3000` 設定（遠端連線看不到 AI 服務設定），也要透過這條隧道。
   - Synology 預設 `AllowTcpForwarding no`，需在 `/etc/ssh/sshd_config` **檔尾**加 `Match User <帳號>` 與 `AllowTcpForwarding yes`，先用 `sudo sshd -t` 檢查，再 `sudo synosystemctl restart sshd`。修改前先備份；DSM 更新或在介面改 SSH 設定時可能被覆寫。
   - sshd 重啟後，**既有的 SSH 連線仍沿用舊設定**，要關掉重連；本機 3000 若還被舊的 `ssh` 佔用，新的轉發會失敗（`lsof -nP -iTCP:3000 -sTCP:LISTEN` 檢查）。
   - 若 Mac 上有 Surge 等代理工具，連 127.0.0.1 出現怪狀時，用 `curl --noproxy '*'` 對照可以分辨是否被代理攔截。
@@ -205,7 +205,7 @@ npm run dev
 
 開發模式（`npm run dev`）會拒絕所有遠端（Tailscale）要求，只限本機使用。
 
-測試其他 Tailscale 身分用的伺服器旗標（`CHATGPT_SHARED`、`FRIENDS_CACHE`）說明見 [`server/README.md`](server/README.md)。
+測試其他 Tailscale 身分用的伺服器旗標（`CHATGPT_SHARED`、`FRIENDS_CACHE`、`FRIENDS_DAILY_LIMIT`）說明見 [`server/README.md`](server/README.md)。
 
 ## 免責聲明
 

@@ -2,7 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { createApp } from './app.js';
+import { createApp, contentSecurityPolicy } from './app.js';
 import { createStore } from './storage.js';
 import { createJournal } from './journal.js';
 import os from 'node:os';
@@ -50,7 +50,10 @@ listJournals(); // 啟動時打開所有朋友日誌，觸發一次性食物庫�
 const chatgptShared = process.env.CHATGPT_SHARED === '1';
 // FRIENDS_CACHE=1：朋友存的餐點也寫入共用食物庫（預設關閉，防止朋友以自填熱量污染共用庫）。
 const friendsCache = process.env.FRIENDS_CACHE === '1';
-const { app, errors } = createApp({ store, origin, remoteOrigins, ownerLogin, journalFor, listJournals, journal, chatgptShared, friendsCache, devMode: process.argv.includes('--dev') });
+// FRIENDS_DAILY_LIMIT：每位朋友每天可用的 AI 分析次數（預設 30，0 不限），避免朋友無上限消耗擁有者的 API key 額度。
+const friendsDailyLimit = Number(process.env.FRIENDS_DAILY_LIMIT || 30);
+if (!Number.isInteger(friendsDailyLimit) || friendsDailyLimit < 0) throw new Error('FRIENDS_DAILY_LIMIT 必須是 0 以上的整數（0 表示不限）。');
+const { app, errors } = createApp({ store, origin, remoteOrigins, ownerLogin, journalFor, listJournals, journal, chatgptShared, friendsCache, friendsDailyLimit, devMode: process.argv.includes('--dev') });
 let vite;
 if (process.argv.includes('--dev')) {
   const { createServer } = await import('vite');
@@ -58,6 +61,9 @@ if (process.argv.includes('--dev')) {
   app.use(vite.middlewares);
 } else {
   if (!fs.existsSync(path.join(root, 'dist/index.html'))) throw new Error('請先執行 npm run build。');
+  // CSP 只在正式模式加（開發模式的 Vite 會插入自己的腳本）；inline 腳本的雜湊由建置後的 index.html 算出。
+  const csp = contentSecurityPolicy(fs.readFileSync(path.join(root, 'dist/index.html'), 'utf8'));
+  app.use((req, res, next) => { res.setHeader('Content-Security-Policy', csp); next(); });
   app.use(express.static(path.join(root, 'dist')));
   app.get('/', (req, res) => res.sendFile(path.join(root, 'dist/index.html')));
 }

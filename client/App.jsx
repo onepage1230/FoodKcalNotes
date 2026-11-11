@@ -121,10 +121,12 @@ export default function App() {
     setModels([]);return [];
   }
   useEffect(()=>{
-    const params=new URLSearchParams(location.search);if(params.has('login_error')){setError(params.get('login_error'));setScreen('settings');}
+    // 登入失敗的訊息由伺服器的 session 提供，網址只帶旗標（不顯示網址裡的文字，防止假訊息連結）。
+    const loginFailed=new URLSearchParams(location.search).has('login_error');if(loginFailed)setScreen('settings');
     window.history.replaceState({},'', '/');
     (async()=>{
       const state=await api('/api/status');csrf.current=state.csrf;setStatus(state);
+      if(loginFailed)setError(state.loginError||'登入驗證失敗，請重新登入。');
       const data=await loadJournal();
       const list=await loadAccount();
       if(list.length&&!list.some(m=>m.slug===data.settings.model)){

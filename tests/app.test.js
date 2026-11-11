@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request as httpRequest } from 'node:http';
 import { generateKeyPair, SignJWT } from 'jose';
-import { createApp, allowedModel } from '../server/app.js';
+import { createApp, allowedModel, contentSecurityPolicy } from '../server/app.js';
 import { verifyIdentity, ISSUER } from '../server/oauth.js';
 import { readSSE } from '../server/sse.js';
 import { createJournal } from '../server/journal.js';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -137,6 +138,25 @@ test('OAuth state、cookie、client ID 與重放驗證', async t => {
   const valid = `/auth/callback?state=${[...f.pending.keys()][0]}&code=fake-code`;
   assert.equal((await f.request(valid)).headers.get('location'), '/?login=success');
   await f.request(valid); assert.equal(f.calls.exchange, 1);
+});
+test('登入失敗訊息存在 session，網址只帶旗標；成功登入後清除', async t => {
+  const f = await fixture(t);
+  await f.request('/auth/chatgpt', {});
+  const res = await f.request(`/auth/callback?state=${[...f.pending.keys()][0]}&error=access_denied`);
+  assert.equal(res.headers.get('location'), '/?login_error=1');
+  assert.equal((await (await f.request('/api/status')).json()).loginError, '登入或授權已取消，請重試。');
+  await f.request('/auth/chatgpt', { client_id: 'oaiapp_test' });
+  assert.equal((await f.request(`/auth/callback?state=${[...f.pending.keys()][0]}&code=fake-code`)).headers.get('location'), '/?login=success');
+  assert.equal((await (await f.request('/api/status')).json()).loginError, '');
+});
+test('CSP：inline 腳本以 SHA-256 列出，外部腳本不列；表單可轉到 OpenAI 授權頁', () => {
+  const inline = "var t=1;document.title='x'";
+  const csp = contentSecurityPolicy(`<head><script>${inline}</script><script type="module" src="/assets/a.js"></script></head>`);
+  const hash = createHash('sha256').update(inline).digest('base64');
+  assert.match(csp, new RegExp(`script-src 'self' 'sha256-${hash.replace(/[+/]/g, '\\$&')}';`));
+  assert.equal(csp.match(/sha256-/g).length, 1);
+  for (const part of ["default-src 'self'", "object-src 'none'", "frame-ancestors 'none'", "img-src 'self' data: blob:", "form-action 'self' https://auth.openai.com"]) assert.ok(csp.includes(part), part);
+  assert.equal(contentSecurityPolicy('<p>無腳本</p>').includes("script-src 'self';"), true);
 });
 test('逾時與使用者取消 OAuth 不交換 code', async t => {
   const f = await fixture(t);
@@ -542,7 +562,7 @@ function claudeMock() {
   claude.factory = key => { claude.keys.push(key); return { messages: { countTokens: async params => {
     claude.validated.push(key); claude.validatedModel = params.model; if (claude.keyError) throw claude.keyError; return { input_tokens: 8 };
   } }, beta: { messages: { create: async params => {
-    claude.calls.push(params);
+    claude.calls.push(params); if (claude.gate) await claude.gate; // gate：測試可讓呼叫暫停，模擬進行中的分析
     if (claude.error) throw claude.error;
     const text = claude.reply ? claude.reply(params) : JSON.stringify({ name: 'Claude餐', items: [{ name: '測試飯', grams: 100 }] });
     return { stop_reason: 'end_turn', content: [{ type: 'text', text }] };
@@ -1040,4 +1060,26 @@ test('起點每日目標 startGoal：可省略；500–10000 的整數才保存�
   for (const startGoal of [500, 10000, 1500]) assert.equal((await (await f.request('/api/settings', { plan: { ...plan, startGoal } })).json()).plan.startGoal, startGoal);
   await f.request('/api/settings', { goal: 1700 });
   assert.deepEqual(f.journal.preferences().plan, { ...plan, startGoal: 1500 });
+});
+
+test('朋友用量限制：每本朋友日誌同時最多 2 個 AI 要求、每天 FRIENDS_DAILY_LIMIT 次；擁有者與其他朋友不受影響', async t => {
+  const claude = claudeMock();
+  const f = await fixture(t, { anthropicFactory: claude.factory, friendsDailyLimit: 3 });
+  f.journal.putFood({ name: '測試飯', kcalPer100g: 130, source: 'manual' });
+  assert.equal((await providers(f, { providers: [{ id: 'claude', enabled: true }, { id: 'chatgpt', enabled: false }], claudeApiKey: 'sk-ant-test' })).status, 200);
+  const remote = login => ({ Host: 'pc.example.ts.net', Origin: 'https://pc.example.ts.net', 'Tailscale-User-Login': login });
+  const estimate = headers => f.request('/api/estimate', { name: '飯', fallback: 'llm' }, headers);
+  let open; claude.gate = new Promise(resolve => { open = resolve; });
+  const pending = [estimate(remote('friend@example.com')), estimate(remote('friend@example.com')), estimate()];
+  while (claude.calls.length < 3) await new Promise(resolve => setTimeout(resolve, 5));
+  const busy = await estimate(remote('friend@example.com'));
+  assert.equal(busy.status, 429); assert.match((await busy.json()).error, /已有 2 個 AI 分析在進行/);
+  claude.gate = null; open();
+  for (const res of await Promise.all(pending)) assert.equal(res.status, 200);
+  assert.equal((await estimate(remote('friend@example.com'))).status, 200); // 第 3 次（並行被拒的那次不計）
+  const over = await estimate(remote('friend@example.com'));
+  assert.equal(over.status, 429); assert.match((await over.json()).error, /今天的 AI 分析次數已達上限（3 次）/);
+  assert.equal((await estimate(remote('other@example.com'))).status, 200);
+  assert.equal((await estimate(remote('owner@example.com'))).status, 200);
+  for (let i = 0; i < 4; i++) assert.equal((await estimate()).status, 200);
 });

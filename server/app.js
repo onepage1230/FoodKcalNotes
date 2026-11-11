@@ -1,5 +1,6 @@
 import express from 'express';
-import { createOAuth, createTransaction, random, RESOURCE } from './oauth.js';
+import { createHash } from 'node:crypto';
+import { createOAuth, createTransaction, random, RESOURCE, ISSUER } from './oauth.js';
 import { attachFoodRoutes, fallbackWorthy } from './food-routes.js';
 import { collectResponse } from './food-analysis.js';
 import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL, claudeInfer, createClaudeClient, validateClaudeKey } from './claude.js';
@@ -10,8 +11,17 @@ export function allowedModel(slug) {
   return !!match && Number(match[1]) < 6;
 }
 
+// 正式畫面的 Content-Security-Policy：只允許同源腳本與 index.html 內的 inline 腳本（以 SHA-256 雜湊列出）。
+// 照片預覽用 data:／blob:；登入表單 POST 後會 303 轉到 OpenAI 授權頁，form-action 需包含它。
+export function contentSecurityPolicy(html) {
+  const hashes = [...html.matchAll(/<script\b(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/gi)].filter(m => m[1].trim())
+    .map(m => ` 'sha256-${createHash('sha256').update(m[1]).digest('base64')}'`).join('');
+  return ["default-src 'self'", `script-src 'self'${hashes}`, "style-src 'self'", "img-src 'self' data: blob:", "connect-src 'self'",
+    "object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", `form-action 'self' ${ISSUER}`].join('; ');
+}
+
 export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', journalFor = null, listJournals = null,
-  oauth = createOAuth(), fetcher = fetch, journal = null, anthropicFactory = createClaudeClient, chatgptShared = false, friendsCache = false, devMode = false, now = () => new Date() }) {
+  oauth = createOAuth(), fetcher = fetch, journal = null, anthropicFactory = createClaudeClient, chatgptShared = false, friendsCache = false, friendsDailyLimit = 30, devMode = false, now = () => new Date() }) {
   const app = express();
   // 遠端網址（例如 Tailscale serve 的 https://xxx.ts.net）只能使用日誌，不能管理 ChatGPT 登入。
   const origins = [origin, ...remoteOrigins];
@@ -213,7 +223,7 @@ export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', 
       res.status(meal ? 200 : 404).json(meal || { error: '找不到餐點。' });
     });
   }
-  app.get('/api/status', (req, res) => res.json({ csrf: req.localSession.csrf, remote: req.remote, user: req.user || '', admin: !req.remote && !!listJournals,
+  app.get('/api/status', (req, res) => res.json({ csrf: req.localSession.csrf, loginError: req.localSession.loginError || '', remote: req.remote, user: req.user || '', admin: !req.remote && !!listJournals,
     providersReady: providersReady(req), ...(!providersReady(req) && { providersError: providersError(req) }),
     // 遠端不回傳 client ID：只給使用中的帳號（以 'active' 代稱）；ChatGPT 不開放給朋友時不給帳號。
     ...(req.remote ? { activeId: 'active', accounts: chatgptFor(req) ? accountsView(true).filter(a => a.client_id === store.data.activeId).map(a => ({ ...a, client_id: 'active' })) : [] }
@@ -254,11 +264,14 @@ export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', 
       if (!existing) store.data.accounts.push(account);
       saveTokens(account, tokens);
       store.data.activeId = clientId; store.save(); catalog = null;
+      if (req.localSession) delete req.localSession.loginError;
       res.redirect(303, '/?login=success');
     } catch (error) {
-      // 不把 code、token 或上游原始回應放入網址或畫面。
+      // 不把 code、token 或上游原始回應放入網址或畫面。訊息存在 session、由 /api/status 取回，
+      // 網址只帶旗標：避免任何人以 /?login_error=任意文字 的連結在畫面上顯示假訊息。
       const message = error.message.startsWith('OpenAI') || error.message.match(/[\u4e00-\u9fff]/) ? error.message : '登入驗證失敗，請重新登入。';
-      res.redirect(303, `/?login_error=${encodeURIComponent(message)}`);
+      if (req.localSession) req.localSession.loginError = message;
+      res.redirect(303, '/?login_error=1');
     }
   });
   app.post('/api/account', (req, res) => {
@@ -313,7 +326,7 @@ export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', 
     store.save();
     res.json(providersView());
   });
-  if (journal) attachFoodRoutes(app, { journal, requireProvider, providerChain, running, friendsCache, now });
+  if (journal) attachFoodRoutes(app, { journal, requireProvider, providerChain, running, friendsCache, friendsDailyLimit, now });
   // Vite 或靜態畫面會在 server.js 接上，因此回傳獨立的錯誤 middleware。
   const errors = (error, req, res, next) => {
     if (res.headersSent) return next(error);

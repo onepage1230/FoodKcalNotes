@@ -101,7 +101,7 @@ Then open http://127.0.0.1:3000. The port defaults to 3000 and can be overridden
 
 Configure them on your computer under 設定 → AI 服務 (Settings → AI services). You can use just one or enable both.
 
-ChatGPT sign-in credentials and the Claude API key are stored only in `credentials.json` on your computer (encrypted on Windows; see "Credential protection" above) and are never sent to the browser or other devices. Through Tailscale serve, your devices (phone, tablet, other computers) all connect back to this computer and use the same server-side credentials. ChatGPT sign-in is for your own account only; per OpenAI's terms of use, do not share your account or quota. Claude API usage is billed to the account that owns the API key.
+ChatGPT sign-in credentials and the Claude API key are stored only in `credentials.json` on your computer (encrypted on Windows; see "Credential protection" above) and are never sent to the browser or other devices. Through Tailscale serve, your devices (phone, tablet, other computers) all connect back to this computer and use the same server-side credentials. ChatGPT sign-in is for your own account only; per OpenAI's terms of use, do not share your account or quota. Claude API usage is billed to the account that owns the API key; other Tailscale identities have a daily cap on AI analyses (`FRIENDS_DAILY_LIMIT`, see [`server/README.md`](server/README.md)).
 
 - **ChatGPT (optional)**: Click Continue with ChatGPT to sign in and authorize, then choose a recognition model (photos require a model with image input). It uses your ChatGPT plan's quota; no OpenAI API key is needed. Signing in, switching, and signing out **can only be done on the computer** at `http://127.0.0.1:3000`, because the authorization redirect URL is fixed to localhost.
 - **Claude API**: In the [Claude Console](https://console.anthropic.com/), create an API key **inside a Workspace** and paste it into settings. Before saving, it is validated with the free Token Counting API (for the selected model) and is not saved if invalid; keys not tied to a workspace are rejected with an explanation. Only the last four characters are shown. Choose Haiku 5.5 (default, cheapest), Sonnet 5.5, or Opus 5.5.
@@ -151,7 +151,7 @@ Notes:
 - **`network_mode: host` is required**: the server only listens on 127.0.0.1, so ordinary port mapping cannot reach it.
 - **Time zone**: meal date, time and meal-period all use the server's local time, and containers default to UTC (8 hours behind Taipei). `docker-compose.yml` defaults to `TZ=Asia/Taipei`; override with `TZ=...` in `.env`.
 - **`DATA_DIR` must be a separate folder**, not the repo's `data/` (bundled nutrition data), and owned by uid 1000, otherwise startup fails with `EPERM` on `chmod`.
-- **ChatGPT sign-in must be completed at `127.0.0.1:3000`**. On a host without a browser, open an SSH tunnel from your computer: `ssh -L 3000:127.0.0.1:3000 user@host -p <port>`, then open `http://127.0.0.1:3000`. Close it afterwards. If you only use a Claude API key, paste it in the phone's settings page; no tunnel needed.
+- **ChatGPT sign-in must be completed at `127.0.0.1:3000`**. On a host without a browser, open an SSH tunnel from your computer: `ssh -L 3000:127.0.0.1:3000 user@host -p <port>`, then open `http://127.0.0.1:3000`. Close it afterwards. The Claude API key can likewise only be set at `127.0.0.1:3000` (remote connections do not see the AI service settings), so it also needs this tunnel.
   - Synology defaults to `AllowTcpForwarding no`. Append `Match User <account>` and `AllowTcpForwarding yes` at the **end** of `/etc/ssh/sshd_config`, check with `sudo sshd -t`, then `sudo synosystemctl restart sshd`. Back it up first; DSM updates or changing SSH settings in the UI may overwrite it.
   - After restarting sshd, **existing SSH sessions keep the old setting**: reconnect. If a stale `ssh` still holds local port 3000, the new forward fails (check with `lsof -nP -iTCP:3000 -sTCP:LISTEN`).
   - If a proxy tool such as Surge interferes with 127.0.0.1, compare against `curl --noproxy '*'` to tell whether the proxy is intercepting.
@@ -211,7 +211,7 @@ npm run dev
 
 `npm test` mocks OAuth and the models, so it uses no quota. Development mode (`npm run dev`) rejects all remote (Tailscale) requests and is local-only.
 
-Server flags for testing with other Tailscale identities (`CHATGPT_SHARED`, `FRIENDS_CACHE`) are documented in [`server/README.md`](server/README.md).
+Server flags for testing with other Tailscale identities (`CHATGPT_SHARED`, `FRIENDS_CACHE`, `FRIENDS_DAILY_LIMIT`) are documented in [`server/README.md`](server/README.md).
 
 ## Disclaimer
 

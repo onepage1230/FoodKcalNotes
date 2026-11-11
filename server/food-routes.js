@@ -24,14 +24,29 @@ export function fallbackWorthy(error) {
 }
 
 // now：伺服器本地的「現在」（測試可注入）；候選餐點與再記一次的「今天」都由它決定。
-export function attachFoodRoutes(app, { requireProvider, providerChain, running, friendsCache = false, now = () => new Date() }) {
+// 朋友（非擁有者的 Tailscale 身分）共用擁有者的 API key（如 Claude），每本朋友日誌同時最多這麼多個 AI 要求。
+export const FRIEND_CONCURRENT = 2;
+export function attachFoodRoutes(app, { requireProvider, providerChain, running, friendsCache = false, friendsDailyLimit = 30, now = () => new Date() }) {
   // FRIENDS_CACHE 未開啟時，朋友存的餐點不寫入共用食物庫（不新增食物、不加別名），避免用自填熱量污染共用庫。
   const shareFoods = req => friendsCache || !req.friend;
+  // 朋友用量：分析、重新查詢、AI 估算各算一次；每天上限 friendsDailyLimit（伺服器本地日期，計數在記憶體、重啟歸零；0 不限）。
+  // 回傳釋放並行名額的函式；擁有者不受限。
+  const activeCount = new Map(), dailyCount = new Map();
+  function claim(req) {
+    if (!req.friend) return () => {};
+    const key = req.journal, day = localDay(now()), used = dailyCount.get(key), count = used?.day === day ? used.count : 0;
+    if ((activeCount.get(key) || 0) >= FRIEND_CONCURRENT) throw Object.assign(new Error(`已有 ${FRIEND_CONCURRENT} 個 AI 分析在進行，請等完成後再試。`), { status: 429 });
+    if (friendsDailyLimit && count >= friendsDailyLimit) throw Object.assign(new Error(`今天的 AI 分析次數已達上限（${friendsDailyLimit} 次），請明天再試或手動記錄。`), { status: 429 });
+    dailyCount.set(key, { day, count: count + 1 }); activeCount.set(key, (activeCount.get(key) || 0) + 1);
+    let released = false;
+    return () => { if (released) return; released = true; const n = activeCount.get(key) - 1; n ? activeCount.set(key, n) : activeCount.delete(key); };
+  }
   // 分析與 AI 估算共用：依服務順序建立可停止的 infer（每次呼叫各自逾時重試，失敗才換下一個服務）；沒有服務能用時回傳 null。
   // model 只給 ChatGPT 使用；res 省略時（背景分析）不隨連線中斷而停止。
   async function inference(req, model, res) {
     const { list, skipped, primary } = await providerChain(model, req);
     if (!list.length) { if (skipped) throw skipped; return null; }
+    const release = claim(req); // 確定有服務可用才計次
     const controller = new AbortController(); running.add(controller);
     res?.on('close', () => controller.abort());
     let served = null; // 有任何一次由備援服務處理就記備援服務
@@ -56,7 +71,7 @@ export function attachFoodRoutes(app, { requireProvider, providerChain, running,
       const note = `（由 ${served.label} 處理）`;
       return items.map(i => ({ ...i, notes: `${(i.notes || '').replace(/（由 [^（）]* 處理）$/, '').slice(0, 1000 - note.length)}${note}` }));
     };
-    return { infer, servedBy, tag, signal: controller.signal, abort: () => controller.abort(), done: () => running.delete(controller) };
+    return { infer, servedBy, tag, signal: controller.signal, abort: () => controller.abort(), done: () => { running.delete(controller); release(); } };
   }
   app.get('/api/journal', (req, res) => res.json({ meals: req.journal.meals(req.query.day), dayNutrients: req.journal.dayNutrients(req.query.day), nutrientGoalsSince: req.journal.getMeta('nutrientGoalsSince'),week: req.journal.week(req.query.day), settings: req.journal.preferences(), weight: req.journal.weightState(), since: req.journal.stats().firstDay,
     streak: req.journal.streak(validDate(req.query.today) ? req.query.today : new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)) }));
