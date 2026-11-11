@@ -274,7 +274,7 @@ export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', 
     res.json({ ok: true });
   });
   // 未配對時只回傳配對需要的欄位：不含帳號、登入身分與登入錯誤。
-  app.get('/api/status', (req, res) => req.unpaired ? res.json({ csrf: req.localSession.csrf, pairing: true, remote: req.remote }) : res.json({ csrf: req.localSession.csrf, ownerToken: !!ownerHash && !req.friend, loginError: req.localSession.loginError || '', remote: req.remote, user: req.user || '', admin: !req.remote && !!listJournals,
+  app.get('/api/status', (req, res) => req.unpaired ? res.json({ csrf: req.localSession.csrf, pairing: true, remote: req.remote }) : res.json({ csrf: req.localSession.csrf, ownerToken: !!ownerHash && !req.friend, photoQuota: req.journal?.photoQuota?.() || null, loginError: req.localSession.loginError || '', remote: req.remote, user: req.user || '', admin: !req.remote && !!listJournals,
     providersReady: providersReady(req), ...(!providersReady(req) && { providersError: providersError(req) }),
     // 遠端不回傳 client ID：只給使用中的帳號（以 'active' 代稱）；ChatGPT 不開放給朋友時不給帳號。
     ...(req.remote ? { activeId: 'active', accounts: chatgptFor(req) ? accountsView(true).filter(a => a.client_id === store.data.activeId).map(a => ({ ...a, client_id: 'active' })) : [] }

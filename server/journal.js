@@ -367,7 +367,9 @@ export function createJournal(filename, { foods: shared = null, photoLimit = 0 }
   };
   function getJob(id) { const row = db.prepare('SELECT * FROM jobs WHERE id=?').get(id); return row ? readJob(row, true) : null; }
   const deleteJob = id => db.prepare('DELETE FROM jobs WHERE id=?').run(id).changes;
-  return { close: () => db.close(), getMeta, setMeta, stats, recentMeals, ...library, preferences, updatePreferences, weights, setWeight, deleteWeight, currentWeight, weightState, meals, mealsSince, dayNutrients, meal, saveMeal, week, streak,
+  // 照片上限與目前張數（設定頁說明用）；沒有上限時為 null。
+  const photoQuota = () => photoLimit ? { limit: photoLimit, count: db.prepare("SELECT COUNT(*) AS n FROM meals WHERE photo<>''").get().n } : null;
+  return { close: () => db.close(), photoQuota, getMeta, setMeta, stats, recentMeals, ...library, preferences, updatePreferences, weights, setWeight, deleteWeight, currentWeight, weightState, meals, mealsSince, dayNutrients, meal, saveMeal, week, streak,
     createJob, updateJob, listJobs, getJob, deleteJob,
     deleteMeal: id => { db.prepare("DELETE FROM jobs WHERE status='done' AND meal_id=?").run(id); return db.prepare('DELETE FROM meals WHERE id=?').run(id).changes; },
     exportData: () => ({ version: 1, settings: preferences(), weights: weights(), foods: library.foods(), meals: db.prepare('SELECT * FROM meals ORDER BY day,time').all().map(row => readMeal(row)) }),

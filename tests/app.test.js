@@ -47,7 +47,7 @@ async function fixture(t, extra = {}) {
   const journal = createJournal(':memory:');
   t.after(() => journal.close());
   const friends = new Map();
-  const journalFor = login => { if (!friends.has(login)) { const j = createJournal(':memory:', { foods: journal }); t.after(() => j.close()); friends.set(login, j); } return friends.get(login); };
+  const journalFor = login => { if (!friends.has(login)) { const j = createJournal(':memory:', { foods: journal, photoLimit: extra.friendPhotoLimit || 0 }); t.after(() => j.close()); friends.set(login, j); } return friends.get(login); };
   const { app, errors, pending } = createApp({ store, origin, oauth, fetcher, journal, ...extra,
     remoteOrigins: ['https://pc.example.ts.net'], ownerLogin: 'owner@example.com', journalFor,
     listJournals: () => [{ id: 'owner', login: 'owner@example.com', owner: true, journal }, ...[...friends].map(([login, j]) => { j.setMeta('login', login); return { id: login.replace(/[^a-z]/g, ''), login, owner: false, journal: j }; })] });
@@ -1264,4 +1264,16 @@ test('owner.token：第一次產生 43 字元 base64url（0600），之後沿用
   writeFileSync(path.join(dir, 'owner.token'), 'short');
   assert.throws(() => loadOwnerToken(dir), /owner\.token 格式不正確/);
   assert.equal(readFileSync(path.join(dir, 'owner.token'), 'utf8'), 'short');
+});
+
+test('照片上限說明：有上限的朋友在狀態中取得上限與目前張數；擁有者與無上限時為 null', async t => {
+  const f = await fixture(t, { friendPhotoLimit: 2 });
+  const friend = { Host: 'pc.example.ts.net', Origin: 'https://pc.example.ts.net', 'Tailscale-User-Login': 'friend@example.com' };
+  const status = async headers => (await (await f.request('/api/status', null, headers)).json()).photoQuota;
+  assert.deepEqual(await status(friend), { limit: 2, count: 0 });
+  const meal = { name: '照片餐', day: '2026-10-02', time: '12:00', photo: 'data:image/jpeg;base64,AAAA', items: [{ name: '飯', grams: 100, kcalPer100g: 130 }] };
+  for (let i = 0; i < 3; i++) assert.equal((await f.request('/api/meals', meal, friend)).status, 200);
+  assert.deepEqual(await status(friend), { limit: 2, count: 2 });
+  assert.equal(await status(), null);
+  assert.equal(await status({ ...friend, 'Tailscale-User-Login': 'owner@example.com' }), null);
 });
