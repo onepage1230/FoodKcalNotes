@@ -29,7 +29,7 @@ export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', 
   const sessions = new Map();
   const pending = new Map();
   const refreshing = new Map();
-  const running = new Set();
+  const running = new Set(); // 只收可能使用 ChatGPT 帳號的 AI 工作（朋友在 CHATGPT_SHARED 關閉時不算），登入、切換、登出只看這些
   let catalog = null;
   let authEpoch = 0;
   app.disable('x-powered-by');
@@ -74,12 +74,19 @@ export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', 
         error: '拒絕跨來源要求。', version: '2.0.0', path: req.path, method: req.method,
       });
     const cookie = req.headers.cookie?.split('; ').find(x => x.startsWith('local_session='))?.slice(14);
+    // session 依身分記帳：本機與擁有者共用 'owner'，朋友各用小寫登入名稱，朋友無法擠掉擁有者的 session。
+    const identity = req.friend ? req.user.toLowerCase() : 'owner';
     let session = sessions.get(cookie);
     if (session && session.expiresAt < Date.now()) { sessions.delete(cookie); session = null; }
+    if (session && session.identity !== identity) session = null; // 不同身分的 session 一律視為不存在
     if (!session && req.method === 'GET' && req.path === '/') {
       const id = random();
-      session = { id, csrf: random(), expiresAt: Date.now() + 24 * 3600_000 };
-      if (sessions.size >= 1000) sessions.delete(sessions.keys().next().value); // 上限 1000，淘汰最舊的
+      session = { id, csrf: random(), identity, expiresAt: Date.now() + 24 * 3600_000 };
+      // 每個身分各有上限（擁有者 1000、朋友 20），超過就只淘汰該身分最舊的；朋友之間另有全域上限 1000，不會動到擁有者的 session。
+      const evictOldest = match => { for (const [k, s] of sessions) if (match(s)) return sessions.delete(k); };
+      let own = 0, friends = 0; for (const s of sessions.values()) { if (s.identity === identity) own++; if (s.identity !== 'owner') friends++; }
+      if (own >= (req.friend ? 20 : 1000)) evictOldest(s => s.identity === identity);
+      else if (req.friend && friends >= 1000) evictOldest(s => s.identity !== 'owner');
       sessions.set(id, session);
       res.cookie('local_session', id, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 24 * 3600_000, secure: remote });
     }
@@ -326,7 +333,7 @@ export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', 
     store.save();
     res.json(providersView());
   });
-  if (journal) attachFoodRoutes(app, { journal, requireProvider, providerChain, running, friendsCache, friendsDailyLimit, now });
+  if (journal) attachFoodRoutes(app, { journal, requireProvider, providerChain, running, usesChatgpt: chatgptFor, friendsCache, friendsDailyLimit, now });
   // Vite 或靜態畫面會在 server.js 接上，因此回傳獨立的錯誤 middleware。
   const errors = (error, req, res, next) => {
     if (res.headersSent) return next(error);

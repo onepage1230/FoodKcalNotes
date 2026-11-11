@@ -25,11 +25,13 @@ const ownerLogin = process.env.OWNER_LOGIN || '';
 if (remoteOrigins.length && !ownerLogin) throw new Error('設定 REMOTE_ORIGINS 時也要設定 OWNER_LOGIN（你的 Tailscale 登入帳號）。');
 const friends = new Map();
 const friendsDirectory = path.join(dataDirectory, 'friends');
+// 朋友日誌最多保留 100 張餐點照片（各自計算），超過就清掉最早存入的照片，避免塞滿磁碟；擁有者不限。
+const FRIEND_PHOTO_LIMIT = 100;
 // 朋友日誌以帳號雜湊命名（meals-<id>.sqlite），帳號本身記在日誌的 meta 表供管理員檢視；食物庫共用主日誌。
 function openFriend(id) {
   if (!friends.has(id)) {
     fs.mkdirSync(friendsDirectory, { recursive: true });
-    friends.set(id, createJournal(path.join(friendsDirectory, `meals-${id}.sqlite`), { foods: journal }));
+    friends.set(id, createJournal(path.join(friendsDirectory, `meals-${id}.sqlite`), { foods: journal, photoLimit: FRIEND_PHOTO_LIMIT }));
   }
   return friends.get(id);
 }

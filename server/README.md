@@ -13,6 +13,7 @@ This exists so that a **single user** can record from several devices and test, 
 |---|---|---|
 | `CHATGPT_SHARED` | off | When `1`, requests from other logins may use the ChatGPT sign-in. When off, the ChatGPT provider is skipped for them and only API-key providers (e.g. Claude) are used. |
 | `FRIENDS_CACHE` | off | When `1`, meals saved by other logins may add foods and aliases to the food library. When off, they never write to it. |
+| Photo cap | 100 | Each other login's journal keeps at most 100 meal photos. Saving more clears the photo of the earliest-saved meal (the meal and its items stay); the journal file uses incremental auto-vacuum so the space is returned to disk. The owner's journal is not limited. Fixed in `server/server.js` (`FRIEND_PHOTO_LIMIT`), not an environment variable. |
 | `FRIENDS_DAILY_LIMIT` | `30` | AI requests (analyze, re-lookup, AI estimate) each other login may make per day, by server local date; `0` means no daily limit. Each other login may also have at most 2 AI requests running at once. Counts are kept in memory and reset when the server restarts. The owner is not limited. Over the limit the request is refused with HTTP 429. |
 
 **ChatGPT policy.** OpenAI's terms do not allow sharing a ChatGPT account or its usage with other people. The "Sign in with ChatGPT" login is only for your own account, used by you. Leave `CHATGPT_SHARED` off unless every login it applies to is you, for example your own test account. Turning it on for other people is against OpenAI's terms and at your own risk.
@@ -38,6 +39,7 @@ Code: `server/server.js` (reads the flags), `server/app.js` (owner check, ChatGP
 |---|---|---|
 | `CHATGPT_SHARED` | 關閉 | 設為 `1` 時，其他登入身分的請求也能使用 ChatGPT 登入。關閉時，對它們會略過 ChatGPT，只使用 Claude 這類 API key 服務。 |
 | `FRIENDS_CACHE` | 關閉 | 設為 `1` 時，其他登入身分存的餐點可以新增食物和同義名到食物庫。關閉時完全不寫入。 |
+| 照片上限 | 100 | 每個其他登入身分的日誌最多保留 100 張餐點照片；再存新照片時會清掉最早存入那筆餐點的照片（餐點與品項保留），日誌檔使用 incremental auto_vacuum，空間會還給磁碟。擁有者的日誌不受限。上限寫在 `server/server.js`（`FRIEND_PHOTO_LIMIT`），不是環境變數。 |
 | `FRIENDS_DAILY_LIMIT` | `30` | 其他登入身分每天可送出的 AI 要求次數（分析、重新查詢、AI 估算各算一次），以伺服器本地日期計算；`0` 表示不限每日次數。每個其他身分同時也最多只能有 2 個 AI 要求在進行。計數存在記憶體，伺服器重啟就歸零。擁有者不受限。超過上限時以 HTTP 429 拒絕。 |
 
 **ChatGPT 政策。** 依 OpenAI 使用條款，ChatGPT 帳號和額度不可分享給其他人。「Sign in with ChatGPT」登入只供你本人使用自己的帳號。除非這個旗標涵蓋的每個登入身分都是你自己（例如你的測試帳號），否則請保持 `CHATGPT_SHARED` 關閉。為其他人開啟違反 OpenAI 條款，風險自負。

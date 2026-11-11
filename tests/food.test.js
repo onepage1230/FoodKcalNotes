@@ -322,3 +322,30 @@ test('連勝：連續達標天數、今天未記錄不中斷、今天超標為 0
   assert.equal(db.streak('2026-10-10'), 1);
   db.close();
 });
+
+test('照片上限：只保留最新存入的 N 張，餐點與品項保留；剛保存的照片一定保留；開啟時整理舊照片並啟用 incremental auto_vacuum', t => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'photo-limit-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const main = createJournal(':memory:'); t.after(() => main.close());
+  const file = path.join(dir, 'friend.sqlite'), photo = 'data:image/jpeg;base64,' + 'A'.repeat(4000);
+  const plain = createJournal(file, { foods: main }); // 上限生效前：存 4 張
+  const ids = [1, 2, 3, 4].map(n => plain.saveMeal({ ...baseMeal(), name: '餐' + n, photo }).id); plain.close();
+  const friend = createJournal(file, { foods: main, photoLimit: 3 }); t.after(() => friend.close());
+  assert.equal(friend.meal(ids[0]).hasPhoto, false); assert.equal(friend.meal(ids[0]).items.length, 1);
+  assert.deepEqual(ids.slice(1).map(id => friend.meal(id).hasPhoto), [true, true, true]);
+  const fifth = friend.saveMeal({ ...baseMeal(), name: '餐5', photo }).id;
+  assert.deepEqual([...ids, fifth].map(id => friend.meal(id).hasPhoto), [false, false, true, true, true]);
+  // 替很早存入的餐點補照片：這張保留，改清掉其他最早的。
+  friend.saveMeal({ ...friend.meal(ids[0]), photo });
+  assert.deepEqual([...ids, fifth].map(id => friend.meal(id).hasPhoto), [true, false, false, true, true]);
+  friend.saveMeal({ ...baseMeal(), name: '無照片' }); // 沒有照片的餐點不影響
+  assert.equal([...ids, fifth].filter(id => friend.meal(id).hasPhoto).length, 3);
+  const check = createJournal(':memory:'); t.after(() => check.close());
+  assert.equal(check.saveMeal({ ...baseMeal(), photo }).hasPhoto, true); // 沒設上限（擁有者）不清
+});
+test('照片上限：日誌檔改用 incremental auto_vacuum', t => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'photo-vacuum-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'f.sqlite'); createJournal(file).close();
+  const j = createJournal(file, { photoLimit: 1 }); j.close();
+  const { DatabaseSync } = process.getBuiltinModule('node:sqlite'); const db = new DatabaseSync(file); t.after(() => db.close());
+  assert.equal(db.prepare('PRAGMA auto_vacuum').get().auto_vacuum, 2);
+});

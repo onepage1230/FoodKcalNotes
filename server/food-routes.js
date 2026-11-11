@@ -26,7 +26,7 @@ export function fallbackWorthy(error) {
 // now：伺服器本地的「現在」（測試可注入）；候選餐點與再記一次的「今天」都由它決定。
 // 朋友（非擁有者的 Tailscale 身分）共用擁有者的 API key（如 Claude），每本朋友日誌同時最多這麼多個 AI 要求。
 export const FRIEND_CONCURRENT = 2;
-export function attachFoodRoutes(app, { requireProvider, providerChain, running, friendsCache = false, friendsDailyLimit = 30, now = () => new Date() }) {
+export function attachFoodRoutes(app, { requireProvider, providerChain, running, usesChatgpt = () => true, friendsCache = false, friendsDailyLimit = 30, now = () => new Date() }) {
   // FRIENDS_CACHE 未開啟時，朋友存的餐點不寫入共用食物庫（不新增食物、不加別名），避免用自填熱量污染共用庫。
   const shareFoods = req => friendsCache || !req.friend;
   // 朋友用量：分析、重新查詢、AI 估算各算一次；每天上限 friendsDailyLimit（伺服器本地日期，計數在記憶體、重啟歸零；0 不限）。
@@ -47,7 +47,7 @@ export function attachFoodRoutes(app, { requireProvider, providerChain, running,
     const { list, skipped, primary } = await providerChain(model, req);
     if (!list.length) { if (skipped) throw skipped; return null; }
     const release = claim(req); // 確定有服務可用才計次
-    const controller = new AbortController(); running.add(controller);
+    const controller = new AbortController(); if (usesChatgpt(req)) running.add(controller);
     res?.on('close', () => controller.abort());
     let served = null; // 有任何一次由備援服務處理就記備援服務
     const infer = async body => {

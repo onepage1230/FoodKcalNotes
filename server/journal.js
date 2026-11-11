@@ -145,8 +145,11 @@ export function mergeNutrients(food, item) {
 }
 
 // shared：主日誌。朋友日誌的食物相關方法都改用主日誌的共用食物庫；餐點、設定與 meta 各自保存。
-export function createJournal(filename, { foods: shared = null } = {}) {
+// photoLimit：餐點照片最多保留幾張（0 不限，朋友日誌由 server.js 設定）；超過時清掉最早存入的照片，餐點與品項保留。
+export function createJournal(filename, { foods: shared = null, photoLimit = 0 } = {}) {
   const db = new DatabaseSync(filename);
+  // 有照片上限的日誌改為 incremental auto_vacuum，清掉的照片空間才能還給磁碟；舊檔需要 VACUUM 一次才能切換。
+  if (photoLimit && db.prepare('PRAGMA auto_vacuum').get().auto_vacuum !== 2) db.exec('PRAGMA auto_vacuum=INCREMENTAL; VACUUM;');
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000;
     CREATE TABLE IF NOT EXISTS foods (id TEXT PRIMARY KEY, name TEXT NOT NULL, normalized TEXT NOT NULL UNIQUE, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS meals (id TEXT PRIMARY KEY, day TEXT NOT NULL, time TEXT NOT NULL, name TEXT NOT NULL, items TEXT NOT NULL, photo TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -162,6 +165,14 @@ export function createJournal(filename, { foods: shared = null } = {}) {
   if (!jobColumns.includes('kind')) db.exec("ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'analyze'");
   // 背景分析在伺服器重啟時中斷，無法續跑。
   db.prepare("UPDATE jobs SET status='error', error=? WHERE status='running'").run('伺服器重新啟動，請重試。');
+  // 照片上限：依存入順序（created_at）保留最新的 photoLimit 張，keep 這筆（剛保存的餐點）一定保留；有清掉才回收空間。
+  function trimPhotos(keep = '') {
+    if (!photoLimit) return 0;
+    const { changes } = db.prepare("UPDATE meals SET photo='' WHERE id IN (SELECT id FROM meals WHERE photo<>'' ORDER BY id=? DESC, created_at DESC, rowid DESC LIMIT -1 OFFSET ?)").run(keep, photoLimit);
+    if (changes) db.exec('PRAGMA incremental_vacuum');
+    return changes;
+  }
+  trimPhotos(); // 開啟時先整理（上限生效前存的照片）
   const getMeta = key => db.prepare('SELECT value FROM meta WHERE key=?').get(key)?.value ?? '';
   const setMeta = (key, value) => db.prepare('INSERT INTO meta VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, String(value));
   // 營養目標上線日期（伺服器本地日期）：第一次開啟時寫入，已存在不覆蓋；之前的日子不套用目標與提示。各日誌（含朋友）各自記錄。
@@ -303,6 +314,7 @@ export function createJournal(filename, { foods: shared = null } = {}) {
         .run(id, input.day, input.time, name, JSON.stringify(items), photo, new Date().toISOString());
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
+    if (photo) trimPhotos(id);
     return meal(id);
   }
   function week(day) {

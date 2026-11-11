@@ -56,10 +56,23 @@ async function fixture(t, extra = {}) {
   const home = await fetch(origin);
   const cookie = home.headers.get('set-cookie').split(';')[0];
   const status = await (await fetch(`${origin}/api/status`, { headers: { cookie } })).json();
-  const request = (path, body, { method = body ? 'POST' : 'GET', ...extra } = {}) => new Promise((resolve, reject) => {
+  // session 依身分綁定：帶 Tailscale-User-Login 的要求（朋友或遠端擁有者）自動取得該身分自己的 session，未帶則用本機 session。
+  const identities = new Map();
+  const sessionFor = async headers => {
+    const login = Object.entries(headers).find(([k]) => k.toLowerCase() === 'tailscale-user-login')?.[1]?.toLowerCase();
+    if (!login || 'cookie' in headers) return { cookie, csrf: status.csrf };
+    if (!identities.has(login)) {
+      const base = { Host: 'pc.example.ts.net', Origin: 'https://pc.example.ts.net', 'Tailscale-User-Login': login };
+      const c = (await request('/', undefined, { ...base, cookie: '' })).headers.get('set-cookie')?.split(';')[0];
+      if (!c) return { cookie, csrf: status.csrf }; // 開發模式、偽造 Host 等情況拿不到 session，沿用本機的
+      identities.set(login, { cookie: c, csrf: (await (await request('/api/status', undefined, { ...base, cookie: c })).json()).csrf });
+    }
+    return identities.get(login);
+  };
+  const request = async (path, body, { method = body ? 'POST' : 'GET', ...extra } = {}) => { const s = await sessionFor(extra); return new Promise((resolve, reject) => {
     const req = httpRequest(origin + path, {
     method, redirect: 'manual',
-    headers: { cookie, ...(method !== 'GET' ? { 'Content-Type': 'application/json', 'X-CSRF-Token': status.csrf } : {}), ...extra },
+    headers: { cookie: s.cookie, ...(method !== 'GET' ? { 'Content-Type': 'application/json', 'X-CSRF-Token': s.csrf } : {}), ...extra },
     }, res => {
       const chunks = [];
       res.on('data', chunk => chunks.push(chunk));
@@ -68,7 +81,7 @@ async function fixture(t, extra = {}) {
     });
     req.on('error', reject);
     req.end(body ? JSON.stringify(body) : undefined);
-  });
+  }); };
   // 背景分析：送出後輪詢到工作結束。
   const analyze = async (body, extra, path = '/api/analyze') => {
     const { id } = await (await request(path, body, extra)).json();
@@ -1082,4 +1095,34 @@ test('朋友用量限制：每本朋友日誌同時最多 2 個 AI 要求、每�
   assert.equal((await estimate(remote('other@example.com'))).status, 200);
   assert.equal((await estimate(remote('owner@example.com'))).status, 200);
   for (let i = 0; i < 4; i++) assert.equal((await estimate()).status, 200);
+});
+
+test('朋友的 AI 工作不擋擁有者的 ChatGPT 登入；擁有者自己的工作仍會擋（409）', async t => {
+  const claude = claudeMock();
+  const f = await fixture(t, { anthropicFactory: claude.factory });
+  f.journal.putFood({ name: '測試飯', kcalPer100g: 130, source: 'manual' });
+  assert.equal((await providers(f, { providers: [{ id: 'claude', enabled: true }, { id: 'chatgpt', enabled: false }], claudeApiKey: 'sk-ant-test' })).status, 200);
+  const remote = { Host: 'pc.example.ts.net', Origin: 'https://pc.example.ts.net', 'Tailscale-User-Login': 'friend@example.com' };
+  const estimate = headers => f.request('/api/estimate', { name: '飯', fallback: 'llm' }, headers);
+  const waitCalls = async n => { while (claude.calls.length < n) await new Promise(resolve => setTimeout(resolve, 5)); };
+  let open; claude.gate = new Promise(resolve => { open = resolve; });
+  const friend = estimate(remote); await waitCalls(1);
+  assert.equal((await f.request('/auth/chatgpt', { client_id: 'oaiapp_test' })).status, 303);
+  const owner = estimate(); await waitCalls(2);
+  assert.equal((await f.request('/auth/chatgpt', { client_id: 'oaiapp_test' })).status, 409);
+  claude.gate = null; open();
+  for (const res of await Promise.all([friend, owner])) assert.equal(res.status, 200);
+});
+
+test('session 依身分記帳：朋友重複開首頁不會擠掉擁有者的 session，且每人最多 20 個', async t => {
+  const f = await fixture(t);
+  const remote = login => ({ Host: 'pc.example.ts.net', Origin: 'https://pc.example.ts.net', 'Tailscale-User-Login': login, cookie: '' });
+  const open = async login => (await f.request('/', undefined, remote(login))).headers.get('set-cookie').split(';')[0];
+  const first = await open('friend@example.com'), status = cookie => f.request('/api/status', undefined, { ...remote('friend@example.com'), cookie });
+  assert.equal((await status(first)).status, 200);
+  for (let i = 0; i < 24; i++) await open('Friend@Example.com'); // 25 個（大小寫視為同一人）
+  assert.equal((await f.request('/api/status')).status, 200); // 擁有者不受影響
+  assert.equal((await status(first)).status, 401); // 朋友最舊的已被淘汰
+  const other = await open('other@example.com');
+  assert.equal((await status(other)).status, 401); // 不同身分不能沿用別人的 session
 });

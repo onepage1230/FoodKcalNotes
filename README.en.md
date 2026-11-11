@@ -201,6 +201,13 @@ On Windows the folder is `%USERPROFILE%\.my-chatgpt-local`, and it can be reloca
 - Local connections need no login: other programs or other OS users on the same computer can also reach `127.0.0.1:3000` with your full permissions.
 - `start.local.bat`, the database, and credentials are never committed to git.
 
+## Security assumptions
+
+- The server binds only to `127.0.0.1` and treats any request to `127.0.0.1` without proxy headers as the owner with full rights (admin view of all journals, AI provider settings, ChatGPT login). Any process on the same host is therefore trusted as the owner, including, on a NAS with `network_mode: host`, other host-network containers/packages and other system accounts. Only run it on a host where you trust everything running locally.
+- Remote identity relies entirely on Tailscale serve setting `Tailscale-User-Login` and stripping client-supplied copies. Do not enable Tailscale Funnel on this port, do not put another reverse proxy in front, and do not bind 0.0.0.0.
+- A local process can also send a forged `Host` and `Tailscale-User-Login` directly, impersonating the owner or any friend. The friend usage, session and photo limits only bind people connecting through Tailscale, not local processes.
+- On macOS/Linux `credentials.json` is plain text (0600); protect backups and NAS snapshots of the data directory.
+
 ## Development
 
 ```sh
