@@ -161,6 +161,33 @@ ChatGPT 登入與 AI 服務設定只能在電腦上操作；手機可以記錄�
   - 若 Mac 上有 Surge 等代理工具，連 127.0.0.1 出現怪狀時，用 `curl --noproxy '*'` 對照可以分辨是否被代理攔截。
 - 備份：`DATA_DIR` 內的 `meals.sqlite`（含 `-wal`、`-shm`）、明文的 `credentials.json` 與 `owner.token`（配對碼），備份目的地請選你信任的地方。不備份 `owner.token` 也可以，還原後會產生新的配對碼，裝置重新配對即可。
 
+## 讓朋友使用
+
+朋友不需要加入你的 tailnet：用 Tailscale 的[機器分享](https://tailscale.com/kb/1084/sharing)只分享執行服務的那台電腦或 NAS。朋友經 Tailscale serve 連入時帶著自己的登入身分，伺服器會給每個身分各自一本日誌（見 [`server/README.md`](server/README.md)），不需要配對碼。不要改用 Funnel 或其他反向代理公開（見「安全前提」）。
+
+1. 朋友安裝 Tailscale，用自己的帳號登入。
+2. 在 Tailscale 管理後台的 Machines 找到執行服務的機器，選 Share，把邀請連結傳給朋友。朋友接受後只看得到這一台機器。
+3. 用 ACL 限制分享進來的使用者只能連 8443。預設的全開規則（`src: "*"`）也包含分享使用者，朋友會連得到這台機器的所有埠（SSH、DSM 等）。在 Access controls 把全開規則換成：
+
+   ```jsonc
+   "grants": [
+     // 自己 tailnet 的成員：全開
+     { "src": ["autogroup:member"], "dst": ["*"], "ip": ["*"] },
+     // 分享進來的使用者：只開 Tailscale serve 的 8443
+     { "src": ["autogroup:shared"], "dst": ["*"], "ip": ["8443"] }
+   ]
+   ```
+
+   權限是所有規則的聯集，原本 `grants` 或 `acls` 裡的全開規則要刪掉，限制才有效；其他段落（tag、`group:`、`tests` 等）照舊保留。朋友只看得到被分享的機器，所以 `dst: "*"` 不會擴大範圍。朋友自己 tailnet 的政策也會套用。
+4. 朋友開 `REMOTE_ORIGINS` 的同一個網址，可加入主畫面。
+5. 確認：朋友能正常使用 8443，連這台機器的其他埠（例如 SSH、DSM 的 5000／5001）應該失敗。
+
+**朋友的 AI 服務**：預設朋友不能使用你的 ChatGPT 登入（`CHATGPT_SHARED` 關閉；依 OpenAI 使用條款不可分享帳號或額度），朋友的要求會略過 ChatGPT，改用清單中下一個服務。所以要讓朋友使用 AI 分析，必須另外在「設定 → AI 服務」設定 Claude API key（Claude 訂閱不含 API 額度，要在 Claude Console 另外儲值，費用計入你的帳戶），否則朋友的分析會失敗。ChatGPT 排在第一位時，你自己仍用 ChatGPT，朋友改走 Claude。Claude 模型是全域設定，所有走 Claude 的要求都用同一個模型。
+
+**朋友的限制**：每個身分每天最多 `FRIENDS_DAILY_LIMIT` 次 AI 要求（預設 30）、同時最多 2 個；照片最多保留 100 張；預設不寫入食物庫（`FRIENDS_CACHE`）。朋友不能登入 ChatGPT、不能改 AI 服務設定。
+
+**收回權限**：在管理後台該機器的 Share 設定移除朋友。朋友的日誌檔仍留在資料夾的 `friends/` 內，不需要時可自行刪除。
+
 ## 資料與食物庫
 
 - **本機食物庫**：存在日誌資料庫中；app 內唯讀，沒有新增／修改／刪除介面。

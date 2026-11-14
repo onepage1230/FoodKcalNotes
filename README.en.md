@@ -165,6 +165,33 @@ Notes:
   - If a proxy tool such as Surge interferes with 127.0.0.1, compare against `curl --noproxy '*'` to tell whether the proxy is intercepting.
 - Backup: `meals.sqlite` (with `-wal`, `-shm`), the plaintext `credentials.json` and `owner.token` (pairing code) in `DATA_DIR`; choose a backup destination you trust. Skipping `owner.token` is fine: a restore generates a new code and devices simply pair again.
 
+## Letting friends use it
+
+Friends do not need to join your tailnet: use Tailscale [machine sharing](https://tailscale.com/kb/1084/sharing) to share only the computer or NAS running the service. When a friend connects through Tailscale serve, the request carries their own login, and the server gives each identity its own journal (see [`server/README.md`](server/README.md)); no pairing code is needed. Do not expose it with Funnel or another reverse proxy instead (see "Security assumptions").
+
+1. Your friend installs Tailscale and signs in with their own account.
+2. In the Tailscale admin console, find the machine running the service under Machines, choose Share, and send the invite link to your friend. Once they accept, they can see only that one machine.
+3. Use ACLs to limit shared users to port 8443. The default allow-all rule (`src: "*"`) also includes shared users, so your friend could reach every port on that machine (SSH, DSM and so on). Under Access controls, replace the allow-all rule with:
+
+   ```jsonc
+   "grants": [
+     // Members of your own tailnet: full access
+     { "src": ["autogroup:member"], "dst": ["*"], "ip": ["*"] },
+     // Shared users: only Tailscale serve's port 8443
+     { "src": ["autogroup:shared"], "dst": ["*"], "ip": ["8443"] }
+   ]
+   ```
+
+   Permissions are the union of all rules, so the old allow-all rule in `grants` or `acls` must be removed for the limit to take effect; keep the other sections (tags, `group:`, `tests` and so on). Shared users see only the machines shared with them, so `dst: "*"` does not widen their access. Your friend's own tailnet policy also applies.
+4. Your friend opens the same `REMOTE_ORIGINS` URL and can add it to the home screen.
+5. Check: your friend can use port 8443, and connecting to other ports on the machine (for example SSH, or DSM on 5000/5001) should fail.
+
+**AI service for friends**: by default friends cannot use your ChatGPT sign-in (`CHATGPT_SHARED` is off; OpenAI's terms do not allow sharing an account or its quota), so their requests skip ChatGPT and use the next service in the list. To let friends use AI analysis you must also set up a Claude API key under 設定 → AI 服務 (Settings → AI services). Claude subscriptions do not include API credit: top up separately in the Claude Console, billed to your account. Without it, friends' analyses fail. With ChatGPT first in the list, you keep using ChatGPT and friends go through Claude. The Claude model is a global setting shared by every request that goes through Claude.
+
+**Limits for friends**: each identity may make up to `FRIENDS_DAILY_LIMIT` AI requests per day (default 30), at most 2 at once; at most 100 photos are kept; by default they never write to the food library (`FRIENDS_CACHE`). Friends cannot sign in to ChatGPT or change AI service settings.
+
+**Revoking access**: remove the friend in the machine's Share settings in the admin console. Their journal file stays in the data folder's `friends/` directory; delete it yourself if no longer needed.
+
 ## Data & food library
 
 - **Local food library**: Stored in the journal database; read-only in the app, with no UI to add, edit, or delete entries.
