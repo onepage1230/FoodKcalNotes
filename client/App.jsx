@@ -9,7 +9,7 @@ import { NUTRIENT_GOALS, nutrientGoals, goalInfo, goalStatus, GOAL_STATUS_TEXT }
 import { NUTRIENTS, nutrientValue, nutrientTotals, kcalMismatch } from './nutrients.js';
 import { showCandidates } from './candidate-view.js';
 import Barcode from './Barcode.jsx';
-import { barcodeDraft, withBarcode } from './barcode-view.js';
+import { barcodeDraft, withBarcode, aiBlockedReason } from './barcode-view.js';
 
 const fmt = n => Math.round(n).toLocaleString('en-US');
 const restartConfirmText = (kg, goal) => `以目前體重 ${kg} 公斤、今天與每日目標 ${fmt(goal)} kcal 為新起點重新開始？原本的起始體重、開始日與預計達成日會被取代。`;
@@ -295,7 +295,7 @@ export default function App() {
       <form className="composer" onSubmit={e=>{e.preventDefault();analyze({text,photo:''});}}><button type="button" className="camera-button" aria-label="開啟相機" onClick={()=>setScreen('camera')}><span/></button><button type="button" className="album-button" onClick={()=>album.current.click()}>相簿</button><button type="button" className="album-button" onClick={()=>{setError('');setScreen('barcode');}}>條碼</button><input aria-label="餐點描述" value={text} onChange={e=>setText(e.target.value)} placeholder="或輸入：一碗滷肉飯"/><button className="send-button" aria-label="分析文字" disabled={!text.trim()}>↑</button></form>
     </div>}
     {screen==='admin'&&<Admin api={api} onBack={goHome} onError={setError} source={source} sourceDetails={sourceDetails}/>}
-    {screen==='barcode'&&<Barcode api={api} onBack={goHome} onFound={barcodeFound} onLabel={()=>{setError('');setScreen('camera');}} onManual={manualDraft} onAnalyze={analyzeBarcode} needModel={needModel} model={settings.model} onError={setError}/>}
+    {screen==='barcode'&&<Barcode api={api} onBack={goHome} onFound={barcodeFound} onLabel={()=>{setError('');setScreen('camera');}} onManual={manualDraft} onAnalyze={analyzeBarcode} needModel={needModel} model={settings.model} onError={setError} aiBlocked={aiBlockedReason(status)}/>}
     {screen==='camera'&&<Camera onBack={goHome} onPhoto={selectPhoto} onAlbum={()=>album.current.click()}/>}
     {screen==='compose'&&<div className="screen">{back('這一餐的照片')}<div className="scroll page-pad"><img className="photo-preview" src={photo} alt="準備分析的餐點"/><div className="card"><label>補充份量、品牌或做法<textarea value={text} onChange={e=>setText(e.target.value)} placeholder="例如：飯大約半碗、雞腿有去皮"/></label><p className="muted tiny">照片會壓縮後送至設定的 AI 服務（OpenAI 或 Anthropic）辨識。重量與隱藏油量仍需你確認。</p><button className="primary full" onClick={()=>analyze()}>辨識這一餐</button></div><button className="outline full" onClick={()=>album.current.click()}>換一張照片</button></div></div>}
     {screen==='result'&&<div className="screen">{back('記一餐')}<div className="scroll thread">

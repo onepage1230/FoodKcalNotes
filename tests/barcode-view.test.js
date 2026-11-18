@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeBarcode, defaultGrams, barcodeDraft, withBarcode } from '../client/barcode-view.js';
+import { normalizeBarcode, defaultGrams, barcodeDraft, withBarcode, aiBlockedReason } from '../client/barcode-view.js';
 
 // 條碼查詢前端的純函式（ADR 0013、spec barcode「前端」）；相機與畫面不寫自動測試。
 test('條碼格式：8～14 位數字才合法，去掉空白與連字號；其他回傳 null', () => {
@@ -34,4 +34,11 @@ test('確認畫面草稿：本機庫命中保留 foodId 與 matched，食物的 
 test('AI 查條碼的分析結果：只有一個項目才帶條碼（拆成多項不知道哪項是這個商品）', () => {
   assert.deepEqual(withBarcode([{ name: '某商品', source: 'web' }], '4710088000011'), [{ name: '某商品', source: 'web', barcode: '4710088000011' }]);
   const split = [{ name: '甲' }, { name: '乙' }]; assert.deepEqual(withBarcode(split, '4710088000011'), split);
+});
+
+test('遠端裝置且電腦沒有可用的 AI 服務時，AI 查條碼停用並說明原因；本機或有 AI 服務時不停用', () => {
+  assert.match(aiBlockedReason({ remote: true, providersReady: false }), /電腦/);
+  assert.equal(aiBlockedReason({ remote: true, providersReady: true }), '');
+  assert.equal(aiBlockedReason({ remote: false, providersReady: false }), ''); // 本機可以去設定，按下去會提示
+  assert.equal(aiBlockedReason(null), ''); assert.equal(aiBlockedReason({ remote: true }), ''); // 舊版伺服器沒有 providersReady 時不擋
 });

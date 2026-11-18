@@ -37,7 +37,7 @@ function Scanner({ onBack, onCode }) {
 
 // 條碼查詢流程：掃描／輸入 → GET /api/barcode/:code → 命中交給 onFound（確認畫面沿用「記一餐」草稿）；
 // 未命中顯示三個出口；OFF 暫時無法查詢（503）顯示重試，不當成未命中。AI 查條碼只在使用者按下時呼叫，候選品名可選可改。
-export default function Barcode({ api, onBack, onFound, onLabel, onManual, onAnalyze, needModel, model, onError }) {
+export default function Barcode({ api, onBack, onFound, onLabel, onManual, onAnalyze, needModel, model, onError, aiBlocked = '' }) {
   const [step,setStep] = useState({ kind: 'scan' }); const [name,setName] = useState('');
   async function lookup(code) {
     setStep({ kind: 'loading', code }); onError('');
@@ -60,7 +60,8 @@ export default function Barcode({ api, onBack, onFound, onLabel, onManual, onAna
       <button className="primary full" onClick={()=>lookup(code)}>重試</button><button className="outline full" onClick={onLabel}>拍營養標示</button><button className="outline full" onClick={onManual}>手動新增</button>{again}</div>}
     {(step.kind === 'missing' || step.kind === 'ai') && <div className="card"><h2>資料庫沒有這個條碼</h2><p className="muted tiny">本機食物庫與條碼資料庫（Open Food Facts）都查不到。</p>
       <button className="primary full" onClick={onLabel}>拍營養標示</button><button className="outline full" onClick={onManual}>手動新增</button>
-      <button className="outline full" disabled={step.kind === 'ai'} onClick={()=>askAi(code)}>{step.kind === 'ai' ? 'AI 查詢中…' : '用 AI 上網查這個條碼'}</button>
+      <button className="outline full" disabled={step.kind === 'ai' || !!aiBlocked} onClick={()=>askAi(code)}>{step.kind === 'ai' ? 'AI 查詢中…' : '用 AI 上網查這個條碼'}</button>
+      {aiBlocked && <p className="notice">{aiBlocked}</p>}
       <p className="muted tiny">AI 只找出可能的商品名稱，請對照手上的包裝確認；營養數字之後照一般文字分析查詢。找品名與查熱量各使用一次 AI 額度。</p>{again}</div>}
     {(step.kind === 'candidates' || step.kind === 'analyzing') && <div className="card"><h2>是這個商品嗎？</h2>
       {step.candidates?.length ? step.candidates.map(c=><label className="radio" key={c}><input type="radio" name="barcode-candidate" checked={name===c} onChange={()=>setName(c)}/>{c}</label>)

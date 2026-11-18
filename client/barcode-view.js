@@ -15,3 +15,6 @@ export function barcodeDraft({ item: { warnings = [], ...item } }, { day, time, 
 }
 // AI 查條碼確認品名後的分析結果：只有一個項目時才帶條碼，保存時伺服器才會把條碼寫入食物庫；拆成多項時不知道哪項是這個商品，都不帶。
 export const withBarcode = (items, barcode) => items.length === 1 ? [{ ...items[0], barcode }] : items;
+// 遠端裝置（例如手機經 Tailscale）無法設定 AI 服務（ChatGPT 登入只限本機）：電腦端沒有可用服務時，AI 查條碼要停用並說明。
+// 本機沒有服務時不擋（可以去設定頁）；舊版伺服器沒有 providersReady 時也不擋。
+export const aiBlockedReason = status => status?.remote && status.providersReady === false ? '電腦尚未設定 AI 服務，請在執行服務的電腦上開啟 127.0.0.1 登入 ChatGPT 或設定 Claude API key。' : '';
