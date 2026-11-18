@@ -12,6 +12,6 @@
     "import-foods": "node scripts/import-foods.mjs",
     "fill-nutrients": "node scripts/fill-library-nutrients.mjs"
   },
-  "dependencies": { "@anthropic-ai/sdk": "^1.1.0", "express": "^5.1.0", "jose": "^6.1.0", "react": "^19.2.0", "react-dom": "^19.2.0" },
+  "dependencies": { "@anthropic-ai/sdk": "^1.1.0", "express": "^5.1.0", "jose": "^6.1.0", "react": "^19.2.0", "react-dom": "^19.2.0", "zxing-wasm": "3.1.6" },
   "devDependencies": { "vite": "^7.1.0" }
 }

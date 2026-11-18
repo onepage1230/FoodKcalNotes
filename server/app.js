@@ -14,10 +14,11 @@ export function allowedModel(slug) {
 
 // 正式畫面的 Content-Security-Policy：只允許同源腳本與 index.html 內的 inline 腳本（以 SHA-256 雜湊列出）。
 // 照片預覽用 data:／blob:；登入表單 POST 後會 303 轉到 OpenAI 授權頁，form-action 需包含它。
+// 'wasm-unsafe-eval'：條碼掃描的 WASM 解碼器（zxing-wasm，同源 /assets/*.wasm）需要編譯 WebAssembly；不開 'unsafe-eval'，不用 worker 或 blob 腳本（ADR 0013）。
 export function contentSecurityPolicy(html) {
   const hashes = [...html.matchAll(/<script\b(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/gi)].filter(m => m[1].trim())
     .map(m => ` 'sha256-${createHash('sha256').update(m[1]).digest('base64')}'`).join('');
-  return ["default-src 'self'", `script-src 'self'${hashes}`, "style-src 'self'", "img-src 'self' data: blob:", "connect-src 'self'",
+  return ["default-src 'self'", `script-src 'self' 'wasm-unsafe-eval'${hashes}`, "style-src 'self'", "img-src 'self' data: blob:", "connect-src 'self'",
     "object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", `form-action 'self' ${ISSUER}`].join('; ');
 }
 

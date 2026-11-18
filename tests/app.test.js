@@ -167,10 +167,17 @@ test('CSP：inline 腳本以 SHA-256 列出，外部腳本不列；表單可轉�
   const inline = "var t=1;document.title='x'";
   const csp = contentSecurityPolicy(`<head><script>${inline}</script><script type="module" src="/assets/a.js"></script></head>`);
   const hash = createHash('sha256').update(inline).digest('base64');
-  assert.match(csp, new RegExp(`script-src 'self' 'sha256-${hash.replace(/[+/]/g, '\\$&')}';`));
+  assert.match(csp, new RegExp(`script-src 'self' 'wasm-unsafe-eval' 'sha256-${hash.replace(/[+/]/g, '\\$&')}';`));
   assert.equal(csp.match(/sha256-/g).length, 1);
   for (const part of ["default-src 'self'", "object-src 'none'", "frame-ancestors 'none'", "img-src 'self' data: blob:", "form-action 'self' https://auth.openai.com"]) assert.ok(csp.includes(part), part);
-  assert.equal(contentSecurityPolicy('<p>無腳本</p>').includes("script-src 'self';"), true);
+  assert.equal(contentSecurityPolicy('<p>無腳本</p>').includes("script-src 'self' 'wasm-unsafe-eval';"), true);
+});
+test('CSP：條碼解碼的 WASM 只放寬 wasm-unsafe-eval，不開 unsafe-eval／unsafe-inline，也不另開 worker 或 blob 腳本', () => {
+  const csp = contentSecurityPolicy('<script>var a=1</script>');
+  const script = csp.split('; ').find(p => p.startsWith('script-src '));
+  assert.doesNotMatch(csp, /'unsafe-eval'|'unsafe-inline'|worker-src/);
+  assert.doesNotMatch(script, /blob:|data:|https?:/);
+  assert.ok(csp.includes("connect-src 'self'")); // .wasm 由同源 dist/assets 取得
 });
 test('逾時與使用者取消 OAuth 不交換 code', async t => {
   const f = await fixture(t);
