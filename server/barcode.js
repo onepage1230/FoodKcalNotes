@@ -42,14 +42,15 @@ export function offToItem(response, barcode) {
 const NOT_AVAILABLE = '暫時無法查詢條碼資料庫，請稍後再試，或改用拍營養標示、手動新增。';
 const unavailable = status => Object.assign(new Error(NOT_AVAILABLE), { status });
 // OFF 限速為每 IP 每分鐘 15 次；伺服器端所有身分共用一個視窗，留餘裕只用 10 次，其中朋友合計最多 6 次，免得朋友用光擁有者的名額。
-// 命中快取 24 小時、未命中 1 小時（商品資料可能被補上）；失敗不快取。User-Agent 只放通用專案名稱，不含個人資訊。
+// 命中快取 24 小時、未命中 1 小時（商品資料可能被補上）；失敗不快取。User-Agent 預設只放通用專案名稱，不含個人資訊；部署者可用 BARCODE_CONTACT 加上自己的聯絡信箱（OFF 建議格式 AppName/Version (ContactEmail)），信箱只存在環境變數，不進程式碼。
 export const OFF_LIMIT = 10, FRIEND_OFF_LIMIT = 6, OFF_WINDOW = 60_000, HIT_TTL = 24 * 3600_000, MISS_TTL = 3600_000, CACHE_MAX = 1000;
-const USER_AGENT = 'FoodKcalNotes/1.0';
+const userAgent = contact => contact ? `FoodKcalNotes/1.0 (${contact})` : 'FoodKcalNotes/1.0';
 // 只要 offToItem 用到的欄位，回應小、也不洩漏多餘資料。
 const OFF_FIELDS = 'product_name,product_name_zh,nutriments,product_quantity,serving_size';
 // 條碼查詢：本機庫（以條碼比對）→ Open Food Facts。fetcher 與 now 由呼叫端注入（測試用假的）。
 // lookup(code, journal, { friend })：friend 為朋友身分（占用朋友的 OFF 名額）；快取命中與合併進行中的要求都不計額度。
-export function createBarcodeLookup({ fetcher = fetch, now = () => new Date() }) {
+export function createBarcodeLookup({ fetcher = fetch, now = () => new Date(), contact = '' }) {
+  const USER_AGENT = userAgent(contact);
   const cache = new Map(); const inflight = new Map(); const sent = [], friendSent = []; // sent：最近送出的 OFF 要求時間（毫秒）
   const prune = (list, at) => { while (list.length && list[0] <= at - OFF_WINDOW) list.shift(); };
   async function fromOff(code, friend) {

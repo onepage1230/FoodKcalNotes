@@ -232,7 +232,7 @@ On Windows the folder is `%USERPROFILE%\.my-chatgpt-local`, and it can be reloca
 
 ## Privacy
 
-- Photos and descriptions are sent to **OpenAI or Anthropic** for recognition, depending on the services you configure; web search uses only the food name and description. Barcode lookups send only the barcode number from the server to Open Food Facts (the User-Agent carries just the project name, no personal information). All other data stays on your computer.
+- Photos and descriptions are sent to **OpenAI or Anthropic** for recognition, depending on the services you configure; web search uses only the food name and description. Barcode lookups send only the barcode number from the server to Open Food Facts (the User-Agent carries just the project name by default, no personal information; set `BARCODE_CONTACT` to add your own contact email). All other data stays on your computer.
 - Credentials are kept only on the backend, never in the browser; they are encrypted on Windows and stored as 0600 plain text on macOS/Linux. All writes require an HttpOnly session and a CSRF token.
 - Requests forwarded through Tailscale (carrying `Tailscale-User-Login` or `X-Forwarded-*` headers) are always treated as remote; a forged `Host: 127.0.0.1` will not make them count as local.
 - By default local connections need no login: other programs or other OS users on the same computer can also reach `127.0.0.1:3000` with your full permissions. With `OWNER_TOKEN=1`, only a browser holding the paired HttpOnly cookie is the owner (on by default in Docker).

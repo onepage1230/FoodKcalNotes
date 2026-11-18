@@ -58,8 +58,11 @@ if (!Number.isInteger(friendsDailyLimit) || friendsDailyLimit < 0) throw new Err
 // OWNER_TOKEN=1：擁有者必須用配對碼配對過的瀏覽器（owner_token cookie）才算擁有者，本機程式與偽造標頭拿不到主日誌。
 // 配對碼存在資料夾的 owner.token；Docker 版預設開啟，Windows start.bat 預設關閉。
 if (!['', '0', '1'].includes(process.env.OWNER_TOKEN || '')) throw new Error('OWNER_TOKEN 只能是 1（開啟擁有者配對）或 0（關閉）。');
+// BARCODE_CONTACT：選填，Open Food Facts 建議 User-Agent 帶聯絡信箱；只用環境變數設定，不寫進程式碼。
+const barcodeContact = (process.env.BARCODE_CONTACT || '').trim();
+if (/[\s()\r\n]/.test(barcodeContact) || barcodeContact.length > 100) throw new Error('BARCODE_CONTACT 必須是單一信箱或網址，不含空白與括號。');
 const ownerToken = process.env.OWNER_TOKEN === '1' ? loadOwnerToken(dataDirectory) : null;
-const { app, errors } = createApp({ store, origin, remoteOrigins, ownerLogin, journalFor, listJournals, journal, chatgptShared, friendsCache, friendsDailyLimit, ownerToken, devMode: process.argv.includes('--dev') });
+const { app, errors } = createApp({ store, origin, remoteOrigins, ownerLogin, journalFor, listJournals, journal, chatgptShared, friendsCache, friendsDailyLimit, ownerToken, barcodeContact, devMode: process.argv.includes('--dev') });
 let vite;
 if (process.argv.includes('--dev')) {
   const { createServer } = await import('vite');

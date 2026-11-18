@@ -226,7 +226,7 @@ ChatGPT 登入與 AI 服務設定只能在電腦上操作；手機可以記錄�
 
 ## 隱私
 
-- 照片與描述會依你設定的服務送到 **OpenAI 或 Anthropic** 做辨識；網路搜尋只使用食物名稱與描述。條碼查詢由伺服器把條碼數字送到 Open Food Facts（User-Agent 只有專案名稱，不含個人資訊）。其餘資料都留在你的電腦上。
+- 照片與描述會依你設定的服務送到 **OpenAI 或 Anthropic** 做辨識；網路搜尋只使用食物名稱與描述。條碼查詢由伺服器把條碼數字送到 Open Food Facts（User-Agent 預設只有專案名稱，不含個人資訊；可用 `BARCODE_CONTACT` 自行加上聯絡信箱）。其餘資料都留在你的電腦上。
 - 憑證只存在後端，不放在瀏覽器；Windows 上加密保存，macOS／Linux 為 0600 明文。所有寫入都需要 HttpOnly session 與 CSRF token。
 - 經 Tailscale 轉送的要求（帶 `Tailscale-User-Login` 或 `X-Forwarded-*` 標頭）一律視為遠端，偽造 `Host: 127.0.0.1` 也不會被當成本機。
 - 預設本機連線不需登入：同一台電腦上的其他程式或其他作業系統使用者，也能以你的完整權限連到 `127.0.0.1:3000`。設 `OWNER_TOKEN=1` 後，要有配對過的 HttpOnly cookie 才是擁有者（Docker 版預設開啟）。

@@ -1505,10 +1505,12 @@ test('UPC-A：12 位條碼在伺服器端補 0 成 13 位後查詢、快取、�
   const other = await f.request('/api/barcode/1234567890123'); assert.equal(other.status, 200); // 13 位不變
   assert.match(off.calls.at(-1).url, /\/1234567890123\.json/);
 });
-test('條碼查詢：User-Agent 是通用專案名稱，不含 email 等個人資訊', async t => {
+test('條碼查詢：User-Agent 預設是通用專案名稱，不含 email 等個人資訊；設 barcodeContact 才帶信箱', async t => {
   const off = offFetcher(); const f = await fixture(t, { barcodeFetcher: off });
   await f.request(`/api/barcode/${BARCODE}`);
   const ua = off.calls[0].options.headers['User-Agent']; assert.match(ua, /^FoodKcalNotes\/\d/); assert.doesNotMatch(ua, /@|\(/);
+  const off2 = offFetcher(); const g = await fixture(t, { barcodeFetcher: off2, barcodeContact: 'off@example.com' });
+  await g.request(`/api/barcode/${BARCODE}`); assert.equal(off2.calls[0].options.headers['User-Agent'], 'FoodKcalNotes/1.0 (off@example.com)');
 });
 test('條碼查詢：OFF 節流所有身分共用（擁有者與朋友合計），超過回「暫時無法查詢」且不打 OFF；視窗過後恢復', async t => {
   let at = new Date('2026-10-02T12:00:00'); const off = offFetcher(); const f = await fixture(t, { barcodeFetcher: off, now: () => at, chatgptShared: true, friendsDailyLimit: 1 });
