@@ -1,4 +1,4 @@
-import { analyzeMeal, lookupItem, backfillNutrients } from './food-analysis.js';
+import { analyzeMeal, lookupItem, backfillNutrients, parseJSON } from './food-analysis.js';
 import { NUTRIENT_KEYS } from '../client/nutrients.js';
 import { validPhoto, validDate, validTime } from './journal.js';
 import { repeatCandidates, localDay, localTime, shiftDay, RANGE_DAYS } from './repeat-candidates.js';
@@ -26,7 +26,7 @@ export function fallbackWorthy(error) {
 // now：伺服器本地的「現在」（測試可注入）；候選餐點與再記一次的「今天」都由它決定。
 // 朋友（非擁有者的 Tailscale 身分）共用擁有者的 API key（如 Claude），每本朋友日誌同時最多這麼多個 AI 要求。
 export const FRIEND_CONCURRENT = 2;
-export function attachFoodRoutes(app, { requireProvider, providerChain, running, usesChatgpt = () => true, friendsCache = false, friendsDailyLimit = 30, now = () => new Date() }) {
+export function attachFoodRoutes(app, { barcodeLookup, requireProvider, providerChain, running, usesChatgpt = () => true, friendsCache = false, friendsDailyLimit = 30, now = () => new Date() }) {
   // FRIENDS_CACHE 未開啟時，朋友存的餐點不寫入共用食物庫（不新增食物、不加別名），避免用自填熱量污染共用庫。
   const shareFoods = req => friendsCache || !req.friend;
   // 朋友用量：分析、重新查詢、AI 估算各算一次；每天上限 friendsDailyLimit（伺服器本地日期，計數在記憶體、重啟歸零；0 不限）。
@@ -101,6 +101,29 @@ export function attachFoodRoutes(app, { requireProvider, providerChain, running,
   app.delete('/api/weights/:day', (req, res) => { req.journal.deleteWeight(req.params.day); res.json(req.journal.weightState()); });
   app.delete('/api/meals/:id', (req, res) => { req.journal.deleteMeal(req.params.id); res.json({ ok: true }); });
   app.post('/api/settings', (req, res) => res.json(req.journal.updatePreferences(req.body, { today: localDay(now()) })));
+  // 條碼查詢（ADR 0013）：不經背景 job、不呼叫 AI、不計入朋友的 AI 上限；結果由前端顯示後讓使用者確認。
+  app.get('/api/barcode/:code', async (req, res) => {
+    if (!/^\d{8,14}$/.test(req.params.code)) return res.status(400).json({ error: '條碼需為 8～14 位數字。' });
+    res.json(await barcodeLookup(req.params.code, req.journal));
+  });
+  // 使用者按下「用 AI 上網查這個條碼」才執行（ADR 0013）：只回傳候選品名，不查營養數字、不寫食物庫；使用者確認或修改品名後，
+  // 營養數字走一般的 lookupItem（引用核對照舊），條碼在保存時（item.barcode）才寫入食物庫。計入朋友的 AI 每日與並行上限，擁有者不受限。
+  app.post('/api/barcode/:code/ai', async (req, res) => {
+    requireProvider(req);
+    if (!/^\d{8,14}$/.test(req.params.code)) return res.status(400).json({ error: '條碼需為 8～14 位數字。' });
+    const run = await inference(req, req.body?.model, res);
+    if (!run) return res.status(400).json({ error: '請先在設定中選擇可用模型。' });
+    try {
+      const reply = await run.infer({ instructions: `用網路搜尋這個商品條碼（EAN/UPC）對應的商品，找出最可能的商品名稱（含品牌、口味與規格，例如「可口可樂 330ml 鋁罐」）。只回傳 JSON：{"candidates":["商品名稱", ...]}，最多 3 個、依可能性排序；找不到可靠的結果就回傳空陣列，不要憑記憶猜測，也不要回傳任何營養數字。`,
+        input: [{ role: 'user', content: JSON.stringify({ barcode: req.params.code }) }], tools: [{ type: 'web_search' }], tool_choice: 'required' });
+      const list = parseJSON(reply.text)?.candidates;
+      const names = (Array.isArray(list) ? list : []).filter(n => typeof n === 'string').map(n => n.trim().slice(0, 100)).filter(Boolean);
+      res.json({ candidates: [...new Set(names)].slice(0, 3) });
+    } catch (error) {
+      if (error.timeout) error = new Error('查詢逾時，請重試或改用拍營養標示、手動新增。');
+      throw error;
+    } finally { run.done(); }
+  });
   app.get('/api/foods', (req, res) => res.json({ foods: req.journal.foods(typeof req.query.q === 'string' ? req.query.q : '') }));
   app.get('/api/export', (req, res) => { res.setHeader('Content-Disposition', 'attachment; filename="meal-journal-backup.json"'); res.json(req.journal.exportData()); });
   // 背景工作：立即回傳工作 id，關掉 app 也繼續跑；進度與結果存在日誌的 jobs 表。work 回傳要寫入的結果（result、mealId）。

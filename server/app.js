@@ -2,6 +2,7 @@ import express from 'express';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createOAuth, createTransaction, random, RESOURCE, ISSUER } from './oauth.js';
 import { attachFoodRoutes, fallbackWorthy } from './food-routes.js';
+import { createBarcodeLookup } from './barcode.js';
 import { collectResponse } from './food-analysis.js';
 import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL, claudeInfer, createClaudeClient, validateClaudeKey } from './claude.js';
 
@@ -21,7 +22,7 @@ export function contentSecurityPolicy(html) {
 }
 
 export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', journalFor = null, listJournals = null,
-  oauth = createOAuth(), fetcher = fetch, journal = null, anthropicFactory = createClaudeClient, chatgptShared = false, friendsCache = false, friendsDailyLimit = 30, devMode = false, now = () => new Date(),
+  oauth = createOAuth(), fetcher = fetch, barcodeFetcher = fetch, journal = null, anthropicFactory = createClaudeClient, chatgptShared = false, friendsCache = false, friendsDailyLimit = 30, devMode = false, now = () => new Date(),
   ownerToken = null }) {
   const app = express();
   // 擁有者 token（OWNER_TOKEN=1）：本機與 OWNER_LOGIN 的要求都必須帶有效的 owner_token cookie 才算擁有者。
@@ -377,7 +378,7 @@ export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', 
     store.save();
     res.json(providersView());
   });
-  if (journal) attachFoodRoutes(app, { journal, requireProvider, providerChain, running, usesChatgpt: chatgptFor, friendsCache, friendsDailyLimit, now });
+  if (journal) attachFoodRoutes(app, { barcodeLookup: createBarcodeLookup({ fetcher: barcodeFetcher, now }), journal, requireProvider, providerChain, running, usesChatgpt: chatgptFor, friendsCache, friendsDailyLimit, now });
   // Vite 或靜態畫面會在 server.js 接上，因此回傳獨立的錯誤 middleware。
   const errors = (error, req, res, next) => {
     if (res.headersSent) return next(error);

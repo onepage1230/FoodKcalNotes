@@ -53,7 +53,9 @@ export function validateFood(input) {
     throw bad('食物需要名稱，以及 0～1000 的每 100g 熱量。');
   const values = validNutrients(input);
   return { name, aliases: [...new Set((Array.isArray(input.aliases) ? input.aliases : []).map(a => text(a, 100)).filter(Boolean))].slice(0, 20),
-    kcalPer100g: energy, source: ['manual', 'web', 'llm', 'label'].includes(input.source) ? input.source : 'manual',
+    kcalPer100g: energy, source: ['manual', 'web', 'llm', 'label', 'barcode'].includes(input.source) ? input.source : 'manual',
+    // barcode：包裝條碼（8～14 位數字），食物的識別欄位而非營養資料的證據；沒有或格式不符為空字串。
+    barcode: typeof input.barcode === 'string' && /^\d{8,14}$/.test(input.barcode.trim()) ? input.barcode.trim() : '',
     sourceUrl: safeUrl(input.sourceUrl), sourceTitle: text(input.sourceTitle), notes: text(input.notes, 1000), ...values,
     // estimated：哪些營養素是 AI 估算的；只保留有值的營養素欄位。
     estimated: [...new Set(Array.isArray(input.estimated) ? input.estimated : [])].filter(k => NUTRIENT_KEYS.includes(k) && values[k] !== null) };
@@ -126,12 +128,13 @@ export function validPhoto(photo) {
   return photo;
 }
 
-const AUTOMATED = ['web', 'llm', 'label'];
+// barcode：使用者看過才保存的社群資料，與自動查詢的來源一起走「保存時寫入食物庫」；補營養素時視為有出處但不覆蓋已有出處的值（見 mergeNutrients）。
+const AUTOMATED = ['web', 'llm', 'label', 'barcode'];
 // ADR 0010 的快取例外：只改營養素欄位。null 可被任何值補上（估算值帶 estimated）；
 // 估算欄位只能被有出處（web／label、非命中、不在項目 estimated）的值覆蓋並移出 estimated；有出處的欄位不動。
 export function mergeNutrients(food, item) {
   const estimated = new Set(food.estimated || []); const itemEstimated = new Set(item.estimated || []);
-  const sourced = !item.matched && ['web', 'label'].includes(item.source);
+  const sourced = !item.matched && ['web', 'label', 'barcode'].includes(item.source);
   let changed = false;
   for (const key of NUTRIENT_KEYS) {
     const value = item[key] ?? null;
@@ -229,7 +232,12 @@ export function createJournal(filename, { foods: shared = null, photoLimit = 0 }
       .run(id, food.name, normalize(food.name), JSON.stringify(food));
     return id;
   }
-  const local = { foods, findFood, candidates, addAliases, putFood, fillNutrients };
+  // 以條碼精確比對；同一條碼對應多個食物時取最早存入的（rowid 最小）。
+  function findByBarcode(code) {
+    const row = typeof code === 'string' && code ? db.prepare("SELECT id,data FROM foods WHERE json_extract(data,'$.barcode')=? ORDER BY rowid LIMIT 1").get(code) : null;
+    return row ? { ...JSON.parse(row.data), id: row.id } : null;
+  }
+  const local = { foods, findFood, findByBarcode, candidates, addAliases, putFood, fillNutrients };
   const library = shared ? Object.fromEntries(Object.keys(local).map(key => [key, shared[key]])) : local;
   // 一次性搬移：朋友日誌原有的自動查詢食物（web/llm/label）複製到共用庫，同名不覆蓋；原表保留不動。
   if (shared && !getMeta('foodsMigrated')) {
@@ -303,7 +311,7 @@ export function createJournal(filename, { foods: shared = null, photoLimit = 0 }
     try {
       // 確認保存時，未修改的自動查詢結果寫入共用食物庫（可能在另一個檔案，不在這個交易內）；不覆蓋已有資料。
       // shareFoods=false（未開 FRIENDS_CACHE 的朋友）：完全不寫共用食物庫。
-      if (shareFoods) for (const item of items) if (item.cache && !item.matched && AUTOMATED.includes(item.source)) item.foodId = library.putFood(item, false);
+      if (shareFoods) for (const item of items) if (item.cache && !item.matched && AUTOMATED.includes(item.source)) item.foodId = (item.barcode && library.findByBarcode(item.barcode)?.id) || library.putFood(item, false);
       if (shareFoods) for (const item of items) if (item.matched && item.foodId && item.recognizedName) library.addAliases(item.foodId, [item.recognizedName]);
       // 營養素補值（ADR 0010）：命中項目，或剛寫入／已存在的自動來源項目；改過營養素的項目不參與。
       // 改過名稱或熱量會變成 manual、非命中（不屬自動來源），背景存檔的 LLM 估算 cache=false，都不會進來。

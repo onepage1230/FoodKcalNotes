@@ -1277,3 +1277,132 @@ test('照片上限說明：有上限的朋友在狀態中取得上限與目前�
   assert.equal(await status(), null);
   assert.equal(await status({ ...friend, 'Tailscale-User-Login': 'owner@example.com' }), null);
 });
+
+// 條碼查詢（ADR 0013）：OFF 一律用假 fetcher，不打真實網路。
+const OFF_OK = { status: 1, product: { product_name: '測試飲料', nutrition_data_per: '100g', product_quantity: '330',
+  nutriments: { 'energy-kcal_100g': 45, proteins_100g: 1, fat_100g: 0, carbohydrates_100g: 10, sugars_100g: 9.5, sodium_100g: 0.02 } } };
+const offFetcher = (reply = () => Response.json(OFF_OK)) => { const calls = []; const fn = async (url, options) => { calls.push({ url: String(url), options }); return reply(url, options, calls.length); }; fn.calls = calls; return fn; };
+const BARCODE = '4710088000011';
+
+test('條碼查詢：本機庫沒有就查 OFF，命中回傳 barcode 來源項目', async t => {
+  const off = offFetcher(); const f = await fixture(t, { barcodeFetcher: off });
+  const body = await (await f.request(`/api/barcode/${BARCODE}`)).json();
+  assert.equal(body.found, true); assert.equal(body.origin, 'barcode');
+  assert.equal(body.item.name, '測試飲料'); assert.equal(body.item.source, 'barcode'); assert.equal(body.item.barcode, BARCODE);
+  assert.equal(body.item.sodiumMgPer100g, 20); assert.equal(body.item.packageGrams, 330);
+  assert.match(off.calls[0].url, new RegExp(`/api/v2/product/${BARCODE}\\.json`));
+});
+test('條碼查詢：條碼格式不正確回 400，不打 OFF', async t => {
+  const off = offFetcher(); const f = await fixture(t, { barcodeFetcher: off });
+  assert.equal((await f.request('/api/barcode/abc')).status, 400); assert.equal((await f.request('/api/barcode/123')).status, 400);
+  assert.equal(off.calls.length, 0);
+});
+test('條碼查詢：404、缺熱量、品名亂碼都是未命中（found:false）', async t => {
+  for (const reply of [() => Response.json({ status: 0 }, { status: 404 }), () => Response.json({ status: 1, product: { product_name: '甲', nutriments: {} } }),
+    () => Response.json({ ...OFF_OK, product: { ...OFF_OK.product, product_name: '���' } })]) {
+    const f = await fixture(t, { barcodeFetcher: offFetcher(reply) });
+    const res = await f.request(`/api/barcode/${BARCODE}`); assert.equal(res.status, 200); assert.deepEqual(await res.json(), { found: false });
+  }
+});
+test('條碼查詢：OFF 失敗回「暫時無法查詢」，且不被快取成未命中', async t => {
+  let down = true; const off = offFetcher(() => { if (down) return new Response('busy', { status: 503 }); return Response.json(OFF_OK); });
+  const f = await fixture(t, { barcodeFetcher: off });
+  const res = await f.request(`/api/barcode/${BARCODE}`); assert.equal(res.status, 503); assert.match((await res.json()).error, /暫時無法查詢/);
+  down = false; assert.equal((await (await f.request(`/api/barcode/${BARCODE}`)).json()).found, true);
+  const thrown = await fixture(t, { barcodeFetcher: offFetcher(() => { throw new TypeError('fetch failed'); }) });
+  assert.equal((await thrown.request(`/api/barcode/${BARCODE}`)).status, 503);
+});
+test('條碼查詢：本機庫以條碼命中就不打 OFF；同條碼多筆取最早', async t => {
+  const off = offFetcher(); const f = await fixture(t, { barcodeFetcher: off });
+  const first = f.journal.putFood({ name: '先存的', kcalPer100g: 50, source: 'manual', barcode: BARCODE });
+  f.journal.putFood({ name: '後存的', kcalPer100g: 60, source: 'manual', barcode: BARCODE });
+  const body = await (await f.request(`/api/barcode/${BARCODE}`)).json();
+  assert.equal(body.origin, 'library'); assert.equal(body.item.name, '先存的'); assert.equal(body.item.foodId, first); assert.equal(body.item.matched, true); assert.equal(body.item.source, 'manual');
+  assert.equal(off.calls.length, 0);
+});
+
+const barcodeMeal = (item = {}) => ({ day: '2026-10-02', time: '12:00', photo: '', items: [{ name: '測試飲料', grams: 330, kcalPer100g: 45, source: 'barcode', barcode: BARCODE, matched: false, cache: true,
+  proteinPer100g: 1, fatPer100g: 0, carbsPer100g: 10, sugarPer100g: null, sodiumMgPer100g: null, ...item }] });
+const barcodeFriend = { Host: 'pc.example.ts.net', Origin: 'https://pc.example.ts.net', 'Tailscale-User-Login': 'friend@example.com' };
+
+test('條碼保存：使用者保存後寫入食物庫（連同條碼），下次掃同條碼直接命中本機庫', async t => {
+  const off = offFetcher(); const f = await fixture(t, { barcodeFetcher: off });
+  assert.equal((await f.request('/api/meals', barcodeMeal())).status, 200);
+  const food = f.journal.findByBarcode(BARCODE); assert.equal(food.name, '測試飲料'); assert.equal(food.source, 'barcode'); assert.equal(food.kcalPer100g, 45);
+  assert.equal((await (await f.request(`/api/barcode/${BARCODE}`)).json()).origin, 'library'); assert.equal(off.calls.length, 0);
+});
+test('條碼保存：改過名稱或熱量（變成手動項目）不寫入；沒有 cache 標記不寫入', async t => {
+  const f = await fixture(t, { barcodeFetcher: offFetcher() });
+  await f.request('/api/meals', barcodeMeal({ source: 'manual', name: '我改的名字' }));
+  await f.request('/api/meals', barcodeMeal({ cache: false }));
+  assert.equal(f.journal.findByBarcode(BARCODE), null); assert.equal(f.journal.foods().length, 0);
+});
+test('條碼保存：朋友日誌預設不寫入共用庫，FRIENDS_CACHE 開啟才寫入', async t => {
+  const off = await fixture(t, { barcodeFetcher: offFetcher() });
+  await off.request('/api/meals', barcodeMeal(), barcodeFriend); assert.equal(off.journal.findByBarcode(BARCODE), null);
+  const on = await fixture(t, { barcodeFetcher: offFetcher(), friendsCache: true });
+  await on.request('/api/meals', barcodeMeal(), barcodeFriend); assert.equal(on.journal.findByBarcode(BARCODE).name, '測試飲料');
+});
+test('條碼保存：同條碼已在庫裡就不覆蓋、不新增', async t => {
+  const f = await fixture(t, { barcodeFetcher: offFetcher() });
+  f.journal.putFood({ name: '原本的', kcalPer100g: 50, source: 'manual', barcode: BARCODE });
+  await f.request('/api/meals', barcodeMeal({ name: '另一個名字', kcalPer100g: 99 }));
+  const foods = f.journal.foods(); assert.equal(foods.length, 1); assert.equal(foods[0].name, '原本的'); assert.equal(foods[0].kcalPer100g, 50);
+});
+test('條碼保存：barcode 來源只補 null 與估算的營養素，不覆蓋 web／label 有出處的值', async t => {
+  const f = await fixture(t, { barcodeFetcher: offFetcher() });
+  f.journal.putFood({ name: '測試飲料', kcalPer100g: 45, source: 'label', proteinPer100g: 2, fatPer100g: 7, carbsPer100g: null, sugarPer100g: 5, estimated: ['sugarPer100g'] });
+  await f.request('/api/meals', barcodeMeal({ sugarPer100g: 9.5 }));
+  const food = f.journal.foods()[0];
+  assert.equal(food.proteinPer100g, 2); assert.equal(food.fatPer100g, 7); // 有出處的不動
+  assert.equal(food.carbsPer100g, 10); // null 被補上
+  assert.equal(food.sugarPer100g, 9.5); assert.deepEqual(food.estimated, []); // 估算值可被有出處的條碼資料取代
+  assert.equal(food.source, 'label'); assert.equal(food.barcode, '');
+});
+
+test('條碼查詢：OFF 的命中與未命中都快取，重複掃描不再打 OFF；快取過期後重新查詢', async t => {
+  let at = new Date('2026-10-02T12:00:00'); const off = offFetcher((url) => String(url).includes('4710088000028') ? Response.json({ status: 0 }, { status: 404 }) : Response.json(OFF_OK));
+  const f = await fixture(t, { barcodeFetcher: off, now: () => at });
+  for (let i = 0; i < 3; i++) { await f.request(`/api/barcode/${BARCODE}`); await f.request('/api/barcode/4710088000028'); }
+  assert.equal(off.calls.length, 2);
+  at = new Date(at.getTime() + 25 * 3600_000); await f.request(`/api/barcode/${BARCODE}`); await f.request('/api/barcode/4710088000028');
+  assert.equal(off.calls.length, 4);
+});
+test('條碼查詢：User-Agent 是通用專案名稱，不含 email 等個人資訊', async t => {
+  const off = offFetcher(); const f = await fixture(t, { barcodeFetcher: off });
+  await f.request(`/api/barcode/${BARCODE}`);
+  const ua = off.calls[0].options.headers['User-Agent']; assert.match(ua, /^FoodKcalNotes\/\d/); assert.doesNotMatch(ua, /@|\(/);
+});
+test('條碼查詢：OFF 節流所有身分共用（擁有者與朋友合計），超過回「暫時無法查詢」且不打 OFF；視窗過後恢復', async t => {
+  let at = new Date('2026-10-02T12:00:00'); const off = offFetcher(); const f = await fixture(t, { barcodeFetcher: off, now: () => at, chatgptShared: true, friendsDailyLimit: 1 });
+  const code = i => `4710088${String(i).padStart(6, '0')}`;
+  for (let i = 0; i < 10; i++) assert.equal((await f.request(`/api/barcode/${code(i)}`, null, i % 2 ? barcodeFriend : {})).status, 200);
+  const res = await f.request(`/api/barcode/${code(10)}`, null, barcodeFriend); assert.equal(res.status, 503); assert.match((await res.json()).error, /暫時無法查詢/);
+  assert.equal((await f.request(`/api/barcode/${code(10)}`)).status, 503); assert.equal(off.calls.length, 10);
+  assert.equal((await f.request(`/api/barcode/${code(0)}`)).status, 200); // 快取命中不受節流影響
+  at = new Date(at.getTime() + 61_000); assert.equal((await f.request(`/api/barcode/${code(10)}`)).status, 200); assert.equal(off.calls.length, 11);
+});
+
+test('AI 查條碼：只回傳候選品名（不含營養數字），要求裡帶條碼並使用網路搜尋', async t => {
+  const f = await fixture(t, { barcodeFetcher: offFetcher() });
+  f.calls.reply = JSON.stringify({ candidates: ['可口可樂 330ml 鋁罐', ' 可口可樂 330ml 鋁罐 ', '', 123, '可口可樂 Zero'], kcalPer100g: 42 });
+  const res = await f.request(`/api/barcode/${BARCODE}/ai`, { model: 'gpt-5.6-terra' });
+  assert.equal(res.status, 200); assert.deepEqual(await res.json(), { candidates: ['可口可樂 330ml 鋁罐', '可口可樂 Zero'] });
+  assert.ok(JSON.stringify(f.calls.responses.at(-1)).includes(BARCODE)); assert.deepEqual(f.calls.responses.at(-1).tools, [{ type: 'web_search' }]);
+  assert.equal((await f.request('/api/barcode/abc/ai', { model: 'gpt-5.6-terra' })).status, 400);
+});
+test('AI 查條碼：朋友計入 AI 每日上限，OFF 條碼查詢不計；擁有者不受限', async t => {
+  const f = await fixture(t, { barcodeFetcher: offFetcher(), chatgptShared: true, friendsDailyLimit: 1 });
+  f.calls.reply = JSON.stringify({ candidates: ['某商品'] });
+  for (let i = 0; i < 3; i++) assert.equal((await f.request(`/api/barcode/471008800010${i}`, null, barcodeFriend)).status, 200);
+  const ask = headers => f.request(`/api/barcode/${BARCODE}/ai`, { model: 'gpt-5.6-terra' }, headers);
+  assert.equal((await ask(barcodeFriend)).status, 200); assert.equal((await ask(barcodeFriend)).status, 429);
+  assert.equal((await ask({})).status, 200); assert.equal((await ask({})).status, 200);
+});
+test('AI 查條碼：使用者確認品名並保存（網路查證的項目）後才把條碼寫入食物庫', async t => {
+  const f = await fixture(t, { barcodeFetcher: offFetcher() });
+  f.calls.reply = JSON.stringify({ candidates: ['某商品'] }); await f.request(`/api/barcode/${BARCODE}/ai`, { model: 'gpt-5.6-terra' });
+  assert.equal(f.journal.findByBarcode(BARCODE), null); // 只回傳候選，不寫庫
+  await f.request('/api/meals', barcodeMeal({ name: '某商品', source: 'web', sourceUrl: 'https://example.com/p', sourceTitle: '官網' }));
+  assert.equal(f.journal.findByBarcode(BARCODE).source, 'web');
+});
