@@ -27,8 +27,10 @@ export function offToItem(response, barcode) {
     if (Math.abs(kcal - energy) > Math.max(MISMATCH_KCAL, MISMATCH_RATIO * kcal)) warnings.push(`熱量（${kcal} kcal）與營養素換算（約 ${Math.round(energy)} kcal）不吻合，資料可能有誤，請對照包裝。`);
   }
   const grams = num(p.product_quantity);
+  const serving = /(\d+(?:\.\d+)?)\s*(?:g|ml|公克|毫升)/i.exec(typeof p.serving_size === 'string' ? p.serving_size : ''); // 例如「250 ml」「1 瓶 (330ml)」
+  const servingGrams = serving && Number(serving[1]) > 0 && Number(serving[1]) <= 5000 ? Number(serving[1]) : null;
   return { name: name.slice(0, 100), kcalPer100g: kcal, ...nutrients, source: 'barcode', barcode, matched: false, cache: true, sourceUrl: `${OFF_PRODUCT_URL}${barcode}`, sourceTitle: BARCODE_SOURCE_TITLE,
-    packageGrams: grams !== null && grams > 0 && grams <= 5000 ? grams : null, warnings };
+    packageGrams: grams !== null && grams > 0 && grams <= 5000 ? grams : null, servingGrams, warnings };
 }
 
 const NOT_AVAILABLE = '暫時無法查詢條碼資料庫，請稍後再試，或改用拍營養標示、手動新增。';

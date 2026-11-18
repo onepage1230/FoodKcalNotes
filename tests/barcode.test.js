@@ -9,7 +9,7 @@ const FULL = { 'energy-kcal_100g': 45, proteins_100g: 1, fat_100g: 0, carbohydra
 test('OFF 回應轉成項目：每 100 單位的熱量與營養素、來源 barcode、鈉由 g 換成 mg', () => {
   const item = offToItem(product(FULL), '4710088000011');
   assert.deepEqual(item, { name: '測試飲料', kcalPer100g: 45, proteinPer100g: 1, fatPer100g: 0, carbsPer100g: 10, sugarPer100g: 9.5, sodiumMgPer100g: 20,
-    source: 'barcode', barcode: '4710088000011', matched: false, cache: true, sourceUrl: 'https://world.openfoodfacts.org/product/4710088000011', sourceTitle: '條碼資料庫（社群提供）', packageGrams: null, warnings: [] });
+    source: 'barcode', barcode: '4710088000011', matched: false, cache: true, sourceUrl: 'https://world.openfoodfacts.org/product/4710088000011', sourceTitle: '條碼資料庫（社群提供）', packageGrams: null, servingGrams: null, warnings: [] });
 });
 test('nutrition_data_per 為 100ml 也視為每 100 單位', () => {
   assert.equal(offToItem(product(FULL, { nutrition_data_per: '100ml' }), '4710088000011').kcalPer100g, 45);
@@ -30,4 +30,10 @@ test('熱量與 4P+4C+9F 差距過大附警告，不阻擋；吻合則無警告'
   const off = offToItem(product({ ...FULL, 'energy-kcal_100g': 400 }), '4710088000011');
   assert.equal(off.kcalPer100g, 400); assert.equal(off.warnings.length, 1); assert.match(off.warnings[0], /不吻合/);
   assert.deepEqual(offToItem(product({ ...FULL, 'energy-kcal_100g': 44 }), '4710088000011').warnings, []);
+});
+
+test('一份的重量取 serving_size（g 或 ml）；沒有或看不懂為 null，供沒有整包重量時預設一份', () => {
+  const grams = serving => offToItem(product(FULL, serving === undefined ? {} : { serving_size: serving }), '4710088000011').servingGrams;
+  assert.equal(grams('250 ml'), 250); assert.equal(grams('70 g'), 70); assert.equal(grams('1 瓶 (330ml)'), 330);
+  assert.equal(grams(undefined), null); assert.equal(grams('一包'), null); assert.equal(grams('0 g'), null);
 });

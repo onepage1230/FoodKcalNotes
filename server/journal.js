@@ -232,12 +232,19 @@ export function createJournal(filename, { foods: shared = null, photoLimit = 0 }
       .run(id, food.name, normalize(food.name), JSON.stringify(food));
     return id;
   }
+  // 使用者確認品名後把條碼附到既有食物：食物還沒有條碼、且這個條碼不屬於任何食物時才附上，不改其他欄位。
+  function setBarcode(id, code) {
+    const row = db.prepare('SELECT data FROM foods WHERE id=?').get(id);
+    if (!row || !/^\d{8,14}$/.test(code || '') || findByBarcode(code)) return;
+    const food = JSON.parse(row.data); if (food.barcode) return;
+    db.prepare('UPDATE foods SET data=? WHERE id=?').run(JSON.stringify({ ...food, barcode: code }), id);
+  }
   // 以條碼精確比對；同一條碼對應多個食物時取最早存入的（rowid 最小）。
   function findByBarcode(code) {
     const row = typeof code === 'string' && code ? db.prepare("SELECT id,data FROM foods WHERE json_extract(data,'$.barcode')=? ORDER BY rowid LIMIT 1").get(code) : null;
     return row ? { ...JSON.parse(row.data), id: row.id } : null;
   }
-  const local = { foods, findFood, findByBarcode, candidates, addAliases, putFood, fillNutrients };
+  const local = { foods, findFood, findByBarcode, setBarcode, candidates, addAliases, putFood, fillNutrients };
   const library = shared ? Object.fromEntries(Object.keys(local).map(key => [key, shared[key]])) : local;
   // 一次性搬移：朋友日誌原有的自動查詢食物（web/llm/label）複製到共用庫，同名不覆蓋；原表保留不動。
   if (shared && !getMeta('foodsMigrated')) {
@@ -312,6 +319,7 @@ export function createJournal(filename, { foods: shared = null, photoLimit = 0 }
       // 確認保存時，未修改的自動查詢結果寫入共用食物庫（可能在另一個檔案，不在這個交易內）；不覆蓋已有資料。
       // shareFoods=false（未開 FRIENDS_CACHE 的朋友）：完全不寫共用食物庫。
       if (shareFoods) for (const item of items) if (item.cache && !item.matched && AUTOMATED.includes(item.source)) item.foodId = (item.barcode && library.findByBarcode(item.barcode)?.id) || library.putFood(item, false);
+      if (shareFoods) for (const item of items) if (item.barcode && item.foodId && AUTOMATED.includes(item.source)) library.setBarcode(item.foodId, item.barcode);
       if (shareFoods) for (const item of items) if (item.matched && item.foodId && item.recognizedName) library.addAliases(item.foodId, [item.recognizedName]);
       // 營養素補值（ADR 0010）：命中項目，或剛寫入／已存在的自動來源項目；改過營養素的項目不參與。
       // 改過名稱或熱量會變成 manual、非命中（不屬自動來源），背景存檔的 LLM 估算 cache=false，都不會進來。

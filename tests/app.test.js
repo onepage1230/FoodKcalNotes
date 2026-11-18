@@ -1357,7 +1357,7 @@ test('條碼保存：barcode 來源只補 null 與估算的營養素，不覆蓋
   assert.equal(food.proteinPer100g, 2); assert.equal(food.fatPer100g, 7); // 有出處的不動
   assert.equal(food.carbsPer100g, 10); // null 被補上
   assert.equal(food.sugarPer100g, 9.5); assert.deepEqual(food.estimated, []); // 估算值可被有出處的條碼資料取代
-  assert.equal(food.source, 'label'); assert.equal(food.barcode, '');
+  assert.equal(food.source, 'label'); assert.equal(food.barcode, BARCODE); // 熱量與來源不動；條碼附到同名食物
 });
 
 test('條碼查詢：OFF 的命中與未命中都快取，重複掃描不再打 OFF；快取過期後重新查詢', async t => {
@@ -1405,4 +1405,29 @@ test('AI 查條碼：使用者確認品名並保存（網路查證的項目）�
   assert.equal(f.journal.findByBarcode(BARCODE), null); // 只回傳候選，不寫庫
   await f.request('/api/meals', barcodeMeal({ name: '某商品', source: 'web', sourceUrl: 'https://example.com/p', sourceTitle: '官網' }));
   assert.equal(f.journal.findByBarcode(BARCODE).source, 'web');
+});
+
+test('條碼保存：AI 查條碼確認的品名命中既有食物或同名食物時，條碼附到那個食物；已有條碼的不改', async t => {
+  const f = await fixture(t, { barcodeFetcher: offFetcher() });
+  const plain = f.journal.putFood({ name: '測試飲料', kcalPer100g: 45, source: 'web' });
+  await f.request('/api/meals', barcodeMeal({ matched: true, foodId: plain, source: 'web' }));
+  assert.equal(f.journal.findByBarcode(BARCODE).name, '測試飲料');
+  const other = '4710088000028';
+  await f.request('/api/meals', barcodeMeal({ matched: true, foodId: plain, source: 'web', barcode: other }));
+  assert.equal(f.journal.findByBarcode(other), null);
+  const g = await fixture(t, { barcodeFetcher: offFetcher() });
+  g.journal.putFood({ name: '測試飲料', kcalPer100g: 45, source: 'web' });
+  await g.request('/api/meals', barcodeMeal({ source: 'web', matched: false, cache: true }));
+  assert.equal(g.journal.findByBarcode(BARCODE).name, '測試飲料');
+});
+test('條碼保存：條碼已屬於另一個食物時，不再附到別的食物；朋友未開食物庫共享時不附', async t => {
+  const f = await fixture(t, { barcodeFetcher: offFetcher() });
+  f.journal.putFood({ name: '原本的', kcalPer100g: 50, source: 'manual', barcode: BARCODE });
+  const plain = f.journal.putFood({ name: '測試飲料', kcalPer100g: 45, source: 'web' });
+  await f.request('/api/meals', barcodeMeal({ matched: true, foodId: plain, source: 'web' }));
+  assert.equal(f.journal.findByBarcode(BARCODE).name, '原本的');
+  const g = await fixture(t, { barcodeFetcher: offFetcher() });
+  const id = g.journal.putFood({ name: '測試飲料', kcalPer100g: 45, source: 'web' });
+  await g.request('/api/meals', barcodeMeal({ matched: true, foodId: id, source: 'web' }), barcodeFriend);
+  assert.equal(g.journal.findByBarcode(BARCODE), null);
 });
