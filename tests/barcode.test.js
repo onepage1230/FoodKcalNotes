@@ -37,3 +37,11 @@ test('一份的重量取 serving_size（g 或 ml）；沒有或看不懂為 null
   assert.equal(grams('250 ml'), 250); assert.equal(grams('70 g'), 70); assert.equal(grams('1 瓶 (330ml)'), 330);
   assert.equal(grams(undefined), null); assert.equal(grams('一包'), null); assert.equal(grams('0 g'), null);
 });
+
+test('蛋白質＋脂肪＋碳水超過 101 g（資料不可能）：三項都設為 null 並附警告，不讓整餐保存失敗；其他營養素與熱量保留', () => {
+  const item = offToItem(product({ ...FULL, proteins_100g: 60, fat_100g: 30, carbohydrates_100g: 20 }), '4710088000011');
+  assert.deepEqual([item.proteinPer100g, item.fatPer100g, item.carbsPer100g], [null, null, null]);
+  assert.equal(item.sugarPer100g, 9.5); assert.equal(item.kcalPer100g, 45); assert.equal(item.warnings.length, 1); assert.match(item.warnings[0], /加總超過/);
+  const ok = offToItem(product({ ...FULL, proteins_100g: 50, fat_100g: 30, carbohydrates_100g: 21 }), '4710088000011'); // 剛好 101：容許四捨五入
+  assert.equal(ok.proteinPer100g, 50);
+});
