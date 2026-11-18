@@ -27,7 +27,7 @@ export function offToItem(response, barcode) {
     if (Math.abs(kcal - energy) > Math.max(MISMATCH_KCAL, MISMATCH_RATIO * kcal)) warnings.push(`熱量（${kcal} kcal）與營養素換算（約 ${Math.round(energy)} kcal）不吻合，資料可能有誤，請對照包裝。`);
   }
   const grams = num(p.product_quantity);
-  return { name: name.slice(0, 100), kcalPer100g: kcal, ...nutrients, source: 'barcode', barcode, sourceUrl: `${OFF_PRODUCT_URL}${barcode}`, sourceTitle: BARCODE_SOURCE_TITLE,
+  return { name: name.slice(0, 100), kcalPer100g: kcal, ...nutrients, source: 'barcode', barcode, matched: false, cache: true, sourceUrl: `${OFF_PRODUCT_URL}${barcode}`, sourceTitle: BARCODE_SOURCE_TITLE,
     packageGrams: grams !== null && grams > 0 && grams <= 5000 ? grams : null, warnings };
 }
 

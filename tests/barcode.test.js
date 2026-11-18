@@ -9,7 +9,7 @@ const FULL = { 'energy-kcal_100g': 45, proteins_100g: 1, fat_100g: 0, carbohydra
 test('OFF 回應轉成項目：每 100 單位的熱量與營養素、來源 barcode、鈉由 g 換成 mg', () => {
   const item = offToItem(product(FULL), '4710088000011');
   assert.deepEqual(item, { name: '測試飲料', kcalPer100g: 45, proteinPer100g: 1, fatPer100g: 0, carbsPer100g: 10, sugarPer100g: 9.5, sodiumMgPer100g: 20,
-    source: 'barcode', barcode: '4710088000011', sourceUrl: 'https://world.openfoodfacts.org/product/4710088000011', sourceTitle: '條碼資料庫（社群提供）', packageGrams: null, warnings: [] });
+    source: 'barcode', barcode: '4710088000011', matched: false, cache: true, sourceUrl: 'https://world.openfoodfacts.org/product/4710088000011', sourceTitle: '條碼資料庫（社群提供）', packageGrams: null, warnings: [] });
 });
 test('nutrition_data_per 為 100ml 也視為每 100 單位', () => {
   assert.equal(offToItem(product(FULL, { nutrition_data_per: '100ml' }), '4710088000011').kcalPer100g, 45);
