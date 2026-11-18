@@ -331,7 +331,7 @@ export function createJournal(filename, { foods: shared = null, photoLimit = 0 }
   // 當日營養素：所有餐點的所有項目一起算，未知數是項目數（與 nutrientTotals 一致）。
   function dayNutrients(day) { return nutrientTotals(meals(day).flatMap(m => m.items)); }
   function meal(id) { const row = db.prepare('SELECT * FROM meals WHERE id=?').get(id); return row ? readMeal(row) : null; }
-  const barcodeOf = item => BARCODE_SOURCES.includes(item.source) ? item.barcode : ''; // llm 估算不附條碼
+  const barcodeOf = item => (item.matched ? item.source !== 'llm' : BARCODE_SOURCES.includes(item.source)) ? item.barcode : ''; // llm 估算不附條碼；命中既有食物的項目（來源是食物自己的）不看來源，只看熱量是否相近
   function saveMeal(input, { shareFoods = true } = {}) {
     if (!validDate(input.day) || !validTime(input.time)) throw bad('日期或時間不正確。');
     const items = validateItems(input.items); const photo = validPhoto(input.photo);

@@ -1588,3 +1588,13 @@ test('條碼保存：條碼已屬於另一個食物時，不再附到別的食�
   await g.request('/api/meals', barcodeMeal({ matched: true, foodId: id, source: 'web' }), barcodeFriend);
   assert.equal(g.journal.findByBarcode(BARCODE), null);
 });
+
+test('條碼保存：AI 查條碼確認的品名命中來源為 manual 的既有食物時，熱量相近就附上條碼', async t => {
+  const f = await fixture(t, { barcodeFetcher: offFetcher() });
+  const id = f.journal.putFood({ name: '測試飲料', kcalPer100g: 45, source: 'manual' });
+  await f.request('/api/meals', barcodeMeal({ matched: true, foodId: id, source: 'manual' }));
+  assert.equal(f.journal.findByBarcode(BARCODE).name, '測試飲料');
+  const far = f.journal.putFood({ name: '另一個飲料', kcalPer100g: 0, source: 'manual' });
+  await f.request('/api/meals', barcodeMeal({ name: '另一個飲料', matched: true, foodId: far, source: 'manual', barcode: '4710088000028' }));
+  assert.equal(f.journal.findByBarcode('4710088000028'), null); // 熱量差太多不附
+});
