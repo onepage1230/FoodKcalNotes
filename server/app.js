@@ -2,6 +2,7 @@ import express from 'express';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createOAuth, createTransaction, random, RESOURCE, ISSUER } from './oauth.js';
 import { attachFoodRoutes, fallbackWorthy } from './food-routes.js';
+import { createBarcodeLookup } from './barcode.js';
 import { collectResponse } from './food-analysis.js';
 import { CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL, claudeInfer, createClaudeClient, validateClaudeKey } from './claude.js';
 
@@ -13,15 +14,16 @@ export function allowedModel(slug) {
 
 // 正式畫面的 Content-Security-Policy：只允許同源腳本與 index.html 內的 inline 腳本（以 SHA-256 雜湊列出）。
 // 照片預覽用 data:／blob:；登入表單 POST 後會 303 轉到 OpenAI 授權頁，form-action 需包含它。
+// 'wasm-unsafe-eval'：條碼掃描的 WASM 解碼器（zxing-wasm，同源 /assets/*.wasm）需要編譯 WebAssembly；不開 'unsafe-eval'，不用 worker 或 blob 腳本（ADR 0013）。
 export function contentSecurityPolicy(html) {
   const hashes = [...html.matchAll(/<script\b(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/gi)].filter(m => m[1].trim())
     .map(m => ` 'sha256-${createHash('sha256').update(m[1]).digest('base64')}'`).join('');
-  return ["default-src 'self'", `script-src 'self'${hashes}`, "style-src 'self'", "img-src 'self' data: blob:", "connect-src 'self'",
+  return ["default-src 'self'", `script-src 'self' 'wasm-unsafe-eval'${hashes}`, "style-src 'self'", "img-src 'self' data: blob:", "connect-src 'self'",
     "object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", `form-action 'self' ${ISSUER}`].join('; ');
 }
 
 export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', journalFor = null, listJournals = null,
-  oauth = createOAuth(), fetcher = fetch, journal = null, anthropicFactory = createClaudeClient, chatgptShared = false, friendsCache = false, friendsDailyLimit = 30, devMode = false, now = () => new Date(),
+  oauth = createOAuth(), fetcher = fetch, barcodeFetcher = fetch, journal = null, anthropicFactory = createClaudeClient, chatgptShared = false, friendsCache = false, friendsDailyLimit = 30, devMode = false, now = () => new Date(),
   ownerToken = null }) {
   const app = express();
   // 擁有者 token（OWNER_TOKEN=1）：本機與 OWNER_LOGIN 的要求都必須帶有效的 owner_token cookie 才算擁有者。
@@ -377,7 +379,7 @@ export function createApp({ store, origin, remoteOrigins = [], ownerLogin = '', 
     store.save();
     res.json(providersView());
   });
-  if (journal) attachFoodRoutes(app, { journal, requireProvider, providerChain, running, usesChatgpt: chatgptFor, friendsCache, friendsDailyLimit, now });
+  if (journal) attachFoodRoutes(app, { barcodeLookup: createBarcodeLookup({ fetcher: barcodeFetcher, now }), journal, requireProvider, providerChain, running, usesChatgpt: chatgptFor, friendsCache, friendsDailyLimit, now });
   // Vite 或靜態畫面會在 server.js 接上，因此回傳獨立的錯誤 middleware。
   const errors = (error, req, res, next) => {
     if (res.headersSent) return next(error);

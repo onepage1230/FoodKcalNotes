@@ -8,6 +8,8 @@ import WeightCard from './WeightCard.jsx';
 import { NUTRIENT_GOALS, nutrientGoals, goalInfo, goalStatus, GOAL_STATUS_TEXT } from './nutrient-goals.js';
 import { NUTRIENTS, nutrientValue, nutrientTotals, kcalMismatch } from './nutrients.js';
 import { showCandidates } from './candidate-view.js';
+import Barcode from './Barcode.jsx';
+import { barcodeDraft, withBarcode, aiBlockedReason } from './barcode-view.js';
 
 const fmt = n => Math.round(n).toLocaleString('en-US');
 const restartConfirmText = (kg, goal) => `以目前體重 ${kg} 公斤、今天與每日目標 ${fmt(goal)} kcal 為新起點重新開始？原本的起始體重、開始日與預計達成日會被取代。`;
@@ -30,7 +32,7 @@ const FoodNutrients = ({ food }) => <div className="nutrient-totals food-nutrien
   return <div key={key}><small>{shortLabel(label)}</small><b>{v === null ? '—' : <>{fmtAmount(v, unit)}<small> {unit}</small></>}</b>{v !== null && food.estimated?.includes(key) && <span className="source llm">估</span>}</div>; })}</div>;
 const today = (d = new Date()) => { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
 const nowTime = () => new Date().toTimeString().slice(0,5);
-const sourceLabel = i => `${i.matched ? '本機庫 · ' : ''}${({manual:'手動資料',web:'網路資料',llm:'LLM 估算',label:'營養標示'})[i.source] || '待確認'}`;
+const sourceLabel = i => `${i.matched ? '本機庫 · ' : ''}${({manual:'手動資料',web:'網路資料',llm:'LLM 估算',label:'營養標示',barcode:'條碼資料庫（社群提供）'})[i.source] || '待確認'}`;
 // 本機食物庫的來源分類：匯入資料集看 sourceTitle（食藥署／國健署／品牌官方表），其餘依 source。
 const foodGroup = f => { const t = f.sourceTitle || ''; return /食藥署|國健署/.exec(t)?.[0] || (/官方|營養標示表/.test(t) ? t.split(' ')[0].replace('台灣', '') : sourceLabel({ source: f.source })); };
 
@@ -99,7 +101,7 @@ export default function App() {
       ...(body!==undefined?{body:JSON.stringify(body)}:{})});
     const data=await response.json();
     if(data.pairing&&response.status===401){location.replace('/');throw new Error(data.error);} // 配對失效（換了配對碼）：回首頁顯示配對畫面
-    if(!response.ok)throw new Error(data.error || `要求失敗 (${response.status})`);
+    if(!response.ok)throw Object.assign(new Error(data.error || `要求失敗 (${response.status})`),{status:response.status}); // status：條碼查詢要分辨 503（暫時無法查詢）
     return data;
   }
   const notify=message=>{setToast(message);};
@@ -168,6 +170,13 @@ export default function App() {
     lastInput.current=input;setPhoto(input.photo);setText(input.text);setError('');setSteps([]);setDraft(null);setJobId(null);setBusy(true);setScreen('result');
     try{const {id}=await api('/api/analyze',{...input,model:settings.model,fallback:settings.fallback});setJobId(id);}catch(e){setBusy(false);setError(e.message);}
   }
+  // 條碼（ADR 0013）：命中結果不走背景 job，放進「記一餐」草稿讓使用者確認克數再保存（沿用 save 與 shareFoods 規則）。
+  function barcodeFound(r){lastInput.current=null;setPhoto('');setText('');setSteps([]);setError('');setDraft({...barcodeDraft(r,{day,time:nowTime(),id:crypto.randomUUID()}),via:'barcode'});setScreen('result');}
+  // AI 查條碼確認品名後：用既有的文字分析（/api/estimate，同 lookupItem 與引用核對）取得項目，只有一項時帶條碼，保存時才寫入食物庫。
+  async function analyzeBarcode(name,code){if(needModel())return false;setError('');
+    try{const r=await api('/api/estimate',{name,model:settings.model,fallback:settings.fallback});lastInput.current=null;setPhoto('');setText('');setSteps([]);
+      setDraft({name:'',day,time:nowTime(),photo:'',note:`條碼 ${code}：品名由 AI 搜尋、熱量照一般查詢流程；請對照包裝確認後再保存。`,warnings:r.warnings||[],items:withBarcode(r.items,code),via:'barcode'});setScreen('result');return true;}
+    catch(e){setError(e.message);return false;}}
   async function loadJobs(){const data=await api('/api/jobs');setJobs(data.jobs);return data.jobs;}
   const dropJob=id=>api('/api/jobs/'+id,undefined,'DELETE').then(()=>setJobs(js=>js.filter(j=>j.id!==id)));
   function showJob(j){setSteps(s=>s.length===j.steps.length?s:j.steps);if(j.status==='running')return;setBusy(false);
@@ -279,13 +288,14 @@ export default function App() {
           {jobsOpen&&<div className="job-list">{jobs.map(j=>{const d=new Date(j.createdAt);return <div className="job-row" key={j.id}><time>{(today(d)===today()?'':today(d).slice(5).replace('-','/')+' ')+d.toTimeString().slice(0,5)}</time><span>{[j.hasPhoto&&'照片',j.text].filter(Boolean).join('・')}</span><small>{{running:j.kind==='relookup'?'查詢中':'辨識中',done:j.kind==='relookup'?'已更新':'已記錄',error:'失敗'}[j.status]}</small>
             {j.status==='error'?<>{j.kind!=='relookup'&&<button className="text-button" onClick={()=>retryJob(j.id)}>重試</button>}<button className="text-button danger" onClick={()=>dropJob(j.id).catch(e=>setError(e.message))}>刪除</button></>:<button className="text-button" onClick={()=>j.status==='done'?showSaved(j):openJob(j.id)}>查看</button>}</div>;})}</div>}</>}
         {!meals.length&&<div className="empty"><div className="empty-icon">＋</div><b>把今天的第一餐記下來</b><p>拍張照、選照片，或輸入吃了什麼。<br/>辨識完會自動記錄，之後可以再修改。</p><button className="outline" onClick={manualDraft}>手動記一餐</button></div>}
-        {meals.map(m=><button className="meal-row" key={m.id} onClick={()=>openMeal(m.id)}><time>{m.time}</time><div className="timeline-line"><i/></div><div className="meal-card"><div><b>{m.name}</b><small>{m.items.length} 項 <span className={'source '+(m.items.some(i=>i.source==='llm')?'llm':'web')}>{m.items.some(i=>i.source==='llm')?'含估算':m.items.some(i=>i.source==='web')?'含網路資料':'本機資料'}</span></small></div><strong>{fmt(m.kcal)}</strong></div></button>)}
+        {meals.map(m=><button className="meal-row" key={m.id} onClick={()=>openMeal(m.id)}><time>{m.time}</time><div className="timeline-line"><i/></div><div className="meal-card"><div><b>{m.name}</b><small>{m.items.length} 項 <span className={'source '+(m.items.some(i=>i.source==='llm')?'llm':'web')}>{m.items.some(i=>i.source==='llm')?'含估算':m.items.some(i=>i.source==='web')?'含網路資料':m.items.some(i=>i.source==='barcode')?'含條碼資料':'本機資料'}</span></small></div><strong>{fmt(m.kcal)}</strong></div></button>)}
         {!!meals.length&&<button className="text-button add-manual" onClick={manualDraft}>＋ 手動記一餐</button>}
       </div>
       {candidatesShown&&<div className="candidates" role="group" aria-label="常吃、還沒記的餐點">{candidates.map(c=><button key={c.mealId} className="candidate-card" disabled={repeating} onClick={()=>repeatMeal(c.mealId,c.time)} title={c.items.map(i=>`${i.name} ${fmt(i.grams)}g`).join('、')} aria-label={`記錄 ${c.time} ${c.name} ${fmt(c.kcal)} kcal`}><time>{c.time}</time><small>{fmt(c.kcal)} kcal</small><b>{c.name}</b></button>)}</div>}
-      <form className="composer" onSubmit={e=>{e.preventDefault();analyze({text,photo:''});}}><button type="button" className="camera-button" aria-label="開啟相機" onClick={()=>setScreen('camera')}><span/></button><button type="button" className="album-button" onClick={()=>album.current.click()}>相簿</button><input aria-label="餐點描述" value={text} onChange={e=>setText(e.target.value)} placeholder="或輸入：一碗滷肉飯"/><button className="send-button" aria-label="分析文字" disabled={!text.trim()}>↑</button></form>
+      <form className="composer" onSubmit={e=>{e.preventDefault();analyze({text,photo:''});}}><button type="button" className="camera-button" aria-label="開啟相機" onClick={()=>setScreen('camera')}><span/></button><button type="button" className="album-button" onClick={()=>album.current.click()}>相簿</button><button type="button" className="album-button" onClick={()=>{setError('');setScreen('barcode');}}>條碼</button><input aria-label="餐點描述" value={text} onChange={e=>setText(e.target.value)} placeholder="或輸入：一碗滷肉飯"/><button className="send-button" aria-label="分析文字" disabled={!text.trim()}>↑</button></form>
     </div>}
     {screen==='admin'&&<Admin api={api} onBack={goHome} onError={setError} source={source} sourceDetails={sourceDetails}/>}
+    {screen==='barcode'&&<Barcode api={api} onBack={goHome} onFound={barcodeFound} onLabel={()=>{setError('');setScreen('camera');}} onManual={manualDraft} onAnalyze={analyzeBarcode} needModel={needModel} model={settings.model} onError={setError} aiBlocked={aiBlockedReason(status)}/>}
     {screen==='camera'&&<Camera onBack={goHome} onPhoto={selectPhoto} onAlbum={()=>album.current.click()}/>}
     {screen==='compose'&&<div className="screen">{back('這一餐的照片')}<div className="scroll page-pad"><img className="photo-preview" src={photo} alt="準備分析的餐點"/><div className="card"><label>補充份量、品牌或做法<textarea value={text} onChange={e=>setText(e.target.value)} placeholder="例如：飯大約半碗、雞腿有去皮"/></label><p className="muted tiny">照片會壓縮後送至設定的 AI 服務（OpenAI 或 Anthropic）辨識。重量與隱藏油量仍需你確認。</p><button className="primary full" onClick={()=>analyze()}>辨識這一餐</button></div><button className="outline full" onClick={()=>album.current.click()}>換一張照片</button></div></div>}
     {screen==='result'&&<div className="screen">{back('記一餐')}<div className="scroll thread">
@@ -294,7 +304,7 @@ export default function App() {
       {busy&&<div className="working"><span className="dots">•••</span> 正在分析，可以先離開 {jobId&&<button className="text-button" onClick={cancelJob}>取消辨識</button>}</div>}
       {!busy&&!draft&&lastInput.current&&<button className="outline" onClick={()=>jobId?retryJob(jobId):analyze(lastInput.current)}>重試</button>}
       {draft&&<div className="result-card"><div className="result-title"><b>這樣對嗎？</b><strong>{fmt(total(draft.items))}<small> kcal</small></strong></div>{!!draft.items.length&&<NutrientTotals totals={nutrientTotals(draft.items)} count={draft.items.length}/>}
-        {!draft.id&&!lastInput.current&&<p className="notice">知道熱量和份量時才在這裡記。不確定的話，請回首頁用輸入框描述或拍照，AI 會幫你拆項並估算。</p>}
+        {!draft.id&&!lastInput.current&&!draft.via&&<p className="notice">知道熱量和份量時才在這裡記。不確定的話，請回首頁用輸入框描述或拍照，AI 會幫你拆項並估算。</p>}
         <label>餐點名稱<input aria-label="餐點名稱" value={draft.name} onChange={e=>setDraft(d=>({...d,name:e.target.value}))} placeholder={draft.items.length?'留空會用：'+draft.items.map(i=>i.name).filter(Boolean).join('、'):'例如：午餐便當（非必填）'}/></label>
         <div className="two-columns"><label>日期<input type="date" value={draft.day} onChange={e=>setDraft(d=>({...d,day:e.target.value}))}/></label><label>時間<input type="time" value={draft.time} onChange={e=>setDraft(d=>({...d,time:e.target.value}))}/></label></div>
         {draft.note&&<p className="notice">{draft.note}</p>}{draft.warnings?.map((w,i)=><p className="notice" key={i}>{w}</p>)}
@@ -302,7 +312,9 @@ export default function App() {
           <div className="food-name"><input aria-label={'食物名稱 '+(index+1)} value={item.name} onChange={e=>editItem(index,{name:e.target.value,cache:false,source:'manual',matched:false,foodId:'',sourceUrl:'',sourceTitle:'',aliases:[]})} placeholder="食物名稱"/><button className="remove" aria-label={'移除 '+item.name} onClick={()=>setDraft(d=>({...d,items:d.items.filter((_,i)=>i!==index)}))}>✕</button></div>
           {source(item)}<div className="food-numbers"><label>重量 g<input aria-label={'重量 '+(index+1)} type="number" inputMode="numeric" min="1" max="5000" step="1" value={item.grams} onChange={e=>editItem(index,{grams:e.target.value})}/></label><label>kcal / 100g<input aria-label={'每100g熱量 '+(index+1)} type="number" inputMode="decimal" min="0" max="1000" step="0.1" value={item.kcalPer100g} onChange={e=>editItem(index,{kcalPer100g:e.target.value,cache:false,source:'manual',matched:false,foodId:'',sourceUrl:'',sourceTitle:'',notes:'使用者手動調整熱量。'})}/></label><strong>{fmt(energy(item))}<small> kcal</small></strong></div>
           {(m=>m?.exceeds&&<p className="match-note" role="status">熱量與營養素換算差距 {Math.round(m.ratio*100)}%，請確認是否把每份當成每 100g。</p>)(kcalMismatch(item))}
-          <details className="nutrients"><summary>營養素 <small className="muted">{NUTRIENTS.filter(n=>nutrientValue(item[n.key])!==null).length}/5 項有資料{item.estimated?.length?' · 含估算':''}</small></summary><div className="nutrient-grid">{NUTRIENTS.map(({key,label,unit,max})=><label key={key}><span>{label} {unit}/100g{item.estimated?.includes(key)&&<span className="source llm">估</span>}</span><input aria-label={label+' '+(index+1)} type="number" inputMode="decimal" min="0" max={max} step={unit==='mg'?1:0.1} placeholder="未知" value={item[key]??''} onChange={e=>editNutrient(index,key,e.target.value)}/></label>)}</div></details>
+          {(item.packageGrams>0||item.servingGrams>0)&&<div className="button-row">{[['整包',item.packageGrams],['一份',item.servingGrams]].filter(([,g])=>g>0).map(([label,g])=><button key={label} className={'outline'+(Number(item.grams)===g?' on':'')} onClick={()=>editItem(index,{grams:g})}>{label} {fmt(g)}g</button>)}</div>}
+          {item.source==='barcode'&&<p className="muted tiny">資料來自 Open Food Facts（ODbL 授權，社群提供、未經驗證），請對照包裝。條碼資料是每 100g 或每 100ml；飲料以 ml 當成 g 填寫。</p>}
+          <details className="nutrients" open={draft.via==='barcode'}><summary>營養素 <small className="muted">{NUTRIENTS.filter(n=>nutrientValue(item[n.key])!==null).length}/5 項有資料{item.estimated?.length?' · 含估算':''}</small></summary><div className="nutrient-grid">{NUTRIENTS.map(({key,label,unit,max})=><label key={key}><span>{label} {unit}/100g{item.estimated?.includes(key)&&<span className="source llm">估</span>}</span><input aria-label={label+' '+(index+1)} type="number" inputMode="decimal" min="0" max={max} step={unit==='mg'?1:0.1} placeholder="未知" value={item[key]??''} onChange={e=>editNutrient(index,key,e.target.value)}/></label>)}</div></details>
           {!Number(item.kcalPer100g)&&item.name.trim()&&<button className="outline full" disabled={estimating.includes(item.id)} onClick={()=>estimate(item)}>{estimating.includes(item.id)?'估算中…':'AI 估算'}</button>}
           {item.name.trim()&&<button className="outline full" disabled={estimating.includes(item.id)||relookups.some(r=>r.itemId===item.id)} onClick={()=>relookup(item)}>{relookups.some(r=>r.itemId===item.id)?'查詢中…可以先離開':'以新名稱重新查詢'}</button>}
           {item.portionNote&&<p className="muted tiny">{item.portionNote}</p>}{sourceDetails(item)}
