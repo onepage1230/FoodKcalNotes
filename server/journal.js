@@ -137,8 +137,6 @@ export function validPhoto(photo) {
 
 // barcode：使用者看過才保存的社群資料，與自動查詢的來源一起走「保存時寫入食物庫」；補營養素時等級低於 web／label（見 mergeNutrients）。
 const AUTOMATED = ['web', 'llm', 'label', 'barcode'];
-// 條碼只附到這些來源的項目；llm 估算不附（條碼是食物的識別欄位，估算值不該讓商品被認定）。
-const BARCODE_SOURCES = ['web', 'label', 'barcode'];
 // 條碼附到既有食物前的同一商品檢查：食物的每 100g 熱量與項目的差距在 max(5 kcal, 15%) 以內。同名但熱量差很多多半是另一個商品。
 const kcalClose = (foodKcal, itemKcal) => typeof itemKcal === 'number' && Number.isFinite(itemKcal) && Math.abs(foodKcal - itemKcal) <= Math.max(5, 0.15 * foodKcal);
 // ADR 0010 的快取例外：只改營養素欄位。null 可被任何值補上（估算值帶 estimated；條碼資料庫的值記在 barcodeFilled）；
@@ -331,7 +329,7 @@ export function createJournal(filename, { foods: shared = null, photoLimit = 0 }
   // 當日營養素：所有餐點的所有項目一起算，未知數是項目數（與 nutrientTotals 一致）。
   function dayNutrients(day) { return nutrientTotals(meals(day).flatMap(m => m.items)); }
   function meal(id) { const row = db.prepare('SELECT * FROM meals WHERE id=?').get(id); return row ? readMeal(row) : null; }
-  const barcodeOf = item => (item.matched ? item.source !== 'llm' : BARCODE_SOURCES.includes(item.source)) ? item.barcode : ''; // llm 估算不附條碼；命中既有食物的項目（來源是食物自己的）不看來源，只看熱量是否相近
+  const barcodeOf = item => (item.matched || AUTOMATED.includes(item.source)) ? item.barcode : ''; // 使用者確認品名並保存：不論營養數字來源（含 llm 估算）都附條碼；改過的手動項目不附；附到既有食物時另看熱量是否相近
   function saveMeal(input, { shareFoods = true } = {}) {
     if (!validDate(input.day) || !validTime(input.time)) throw bad('日期或時間不正確。');
     const items = validateItems(input.items); const photo = validPhoto(input.photo);

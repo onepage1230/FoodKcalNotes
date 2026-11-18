@@ -54,7 +54,7 @@
 
 ### 食物庫寫入
 - `barcode` 來源：使用者保存時寫入（含條碼與 `packageGrams`／`servingGrams`）；改過名稱或熱量的不寫入；朋友日誌預設不寫入（與 `FRIENDS_CACHE` 一致）；OFF 資料不進 `data/`。
-- 條碼附到既有食物（`setBarcode(id, code, kcalPer100g)`，保存同名路徑與 AI 路徑共用）：只限項目 `source` 為 `web`／`label`／`barcode`（`llm` 估算不附）；食物的每 100g 熱量與項目的差距在 max(5 kcal, 15%) 以內才附條碼、才用該項目補營養素；超過容差就都不做，項目也不指向該食物（寫不進新食物就不寫入）。命中項目（本機庫自己的熱量）自然通過。食物已有條碼或條碼已屬於別的食物時不改。
+- 條碼附到既有食物（`setBarcode(id, code, kcalPer100g)`，保存同名路徑與 AI 路徑共用）：使用者確認品名並保存後，不論營養數字來源（`web`／`label`／`barcode`／`llm` 估算）都附條碼，改過名稱或熱量的手動項目不附，未命中且 `cache:false`（背景自動存檔）的項目不寫入食物庫、也就不附；食物的每 100g 熱量與項目的差距在 max(5 kcal, 15%) 以內才附條碼、才用該項目補營養素；超過容差就都不做，項目也不指向該食物（寫不進新食物就不寫入）。命中項目（本機庫自己的熱量）自然通過。食物已有條碼或條碼已屬於別的食物時不改。
 - 營養素的補值例外照 ADR 0010 與 `mergeNutrients`，`barcode` 等級低於 `web`／`label`：只補 `null`（記在 `barcodeFilled`），不取代 `estimated`，不覆蓋已有的值；之後有出處的值可覆蓋 `estimated` 或 `barcodeFilled` 的欄位並從清單移除。
 
 ### 前端
