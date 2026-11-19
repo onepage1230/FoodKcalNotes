@@ -138,7 +138,7 @@ export function attachFoodRoutes(app, { barcodeLookup, requireProvider, provider
       .finally(() => { controllers.delete(id); run.done(); });
   }
   // 建立工作失敗（例如資料庫錯誤）時要釋放已佔用的並行名額與 running 登記，否則朋友的名額會一直被占住到重啟。
-  const createJob = (run, journal, job) => { try { return journal.createJob(job); } catch (error) { run.done(); throw error; } };
+  const createJobOrRelease = (run, journal, job) => { try { return journal.createJob(job); } catch (error) { run.done(); throw error; } };
   // 背景分析：成功即自動存成餐點。
   app.post('/api/analyze', async (req, res) => {
     requireProvider(req); const journal = req.journal;
@@ -148,7 +148,7 @@ export function attachFoodRoutes(app, { barcodeLookup, requireProvider, provider
     if (!['web', 'llm'].includes(fallback)) return res.status(400).json({ error: '缺資料處理方式不正確。' });
     const run = await inference(req, model);
     if (!run) return res.status(400).json({ error: '請先在設定中選擇可用模型。' });
-    const id = createJob(run, journal, { text, photo }); const steps = [];
+    const id = createJobOrRelease(run, journal, { text, photo }); const steps = [];
     const emit = ({ label, message }) => { steps.push({ label, message }); journal.updateJob(id, { steps }); };
     runJob(journal, id, run, async () => {
       const analyzed = await analyzeMeal({ text, photo, fallback, at: new Date(journal.getJob(id)?.createdAt ?? Date.now()), journal, infer: run.infer, emit, signal: run.signal });
@@ -175,7 +175,7 @@ export function attachFoodRoutes(app, { barcodeLookup, requireProvider, provider
     if (!old) return res.status(404).json({ error: '找不到餐點或品項。' });
     const run = await inference(req, model);
     if (!run) return res.status(400).json({ error: '請先在設定中選擇可用模型。' });
-    const id = createJob(run, journal, { text: name.trim(), kind: 'relookup', mealId });
+    const id = createJobOrRelease(run, journal, { text: name.trim(), kind: 'relookup', mealId });
     runJob(journal, id, run, async () => {
       const warnings = [];
       const looked = await lookupItem({ item: { id: itemId, name: name.trim(), aliases: [], grams: old.grams, confidence: 'high', portionNote: '', portionBasis: 'reference' },
