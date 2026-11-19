@@ -49,7 +49,7 @@ async function fixture(t, extra = {}) {
   const journal = createJournal(':memory:');
   t.after(() => journal.close());
   const friends = new Map();
-  const journalFor = login => { if (!friends.has(login)) { const j = createJournal(':memory:', { foods: journal, photoLimit: extra.friendPhotoLimit || 0 }); t.after(() => j.close()); friends.set(login, j); } return friends.get(login); };
+  const journalFor = login => { if (!friends.has(login)) { const j = createJournal(':memory:', { foods: journal, photoLimit: extra.friendPhotoLimit || 0 }); t.after(() => j.close()); extra.onFriend?.(j); friends.set(login, j); } return friends.get(login); };
   const { app, errors, pending } = createApp({ store, origin, oauth, fetcher, journal, ...extra,
     remoteOrigins: ['https://pc.example.ts.net'], ownerLogin: 'owner@example.com', journalFor,
     listJournals: () => [{ id: 'owner', login: 'owner@example.com', owner: true, journal }, ...[...friends].map(([login, j]) => { j.setMeta('login', login); return { id: login.replace(/[^a-z]/g, ''), login, owner: false, journal: j }; })] });
@@ -1105,6 +1105,22 @@ test('朋友用量限制：每本朋友日誌同時最多 2 個 AI 要求、每�
   assert.equal((await estimate(remote('other@example.com'))).status, 200);
   assert.equal((await estimate(remote('owner@example.com'))).status, 200);
   for (let i = 0; i < 4; i++) assert.equal((await estimate()).status, 200);
+});
+
+test('朋友用量限制：建立工作失敗（createJob 拋錯）時釋放並行名額，不會一直占住到重啟', async t => {
+  const claude = claudeMock();
+  let broken = true;
+  const f = await fixture(t, { anthropicFactory: claude.factory, onFriend: j => { const real = j.createJob; j.createJob = (...args) => { if (broken) throw new Error('資料庫錯誤'); return real(...args); }; } });
+  f.journal.putFood({ name: '測試飯', kcalPer100g: 130, source: 'manual' });
+  assert.equal((await providers(f, { providers: [{ id: 'claude', enabled: true }, { id: 'chatgpt', enabled: false }], claudeApiKey: 'sk-ant-test' })).status, 200);
+  const remote = { Host: 'pc.example.ts.net', Origin: 'https://pc.example.ts.net', 'Tailscale-User-Login': 'friend@example.com' };
+  const meal = await (await f.request('/api/meals', { name: '飯', day: '2026-01-02', time: '12:00', items: [{ name: '測試飯', grams: 100, kcalPer100g: 130, source: 'llm' }] }, remote)).json();
+  const itemId = meal.items[0].id;
+  // 並行上限是 2：只要各失敗 2 次，名額若沒釋放，之後的要求就會 429。
+  for (let i = 0; i < 2; i++) assert.equal((await f.request('/api/analyze', { text: '飯', fallback: 'llm' }, remote)).status, 500);
+  for (let i = 0; i < 2; i++) assert.equal((await f.request('/api/jobs/relookup', { mealId: meal.id, itemId, name: '飯', fallback: 'llm' }, remote)).status, 500);
+  broken = false;
+  assert.equal((await f.request('/api/estimate', { name: '飯', fallback: 'llm' }, remote)).status, 200);
 });
 
 test('朋友的 AI 工作不擋擁有者的 ChatGPT 登入；擁有者自己的工作仍會擋（409）', async t => {
